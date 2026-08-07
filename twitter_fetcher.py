@@ -4,9 +4,10 @@ twitter_fetcher.py
 Fetches stock option recommendation tweets for Indian equity markets (NSE/BSE).
 
 Strategy (in order):
-  1. ntscraper  — FREE, no API key needed, scrapes via Nitter instances
-  2. Twitter API v2 (tweepy) — requires Basic tier ($100/mo) for search
-  3. Mock data  — always works as final fallback
+  1. Twitter Guest Token API  — FREE, no API key, uses Twitter's own internal API
+  2. ntscraper (Nitter)       — FREE fallback, depends on Nitter instance availability
+  3. Twitter API v2 (tweepy)  — requires Basic tier ($100/mo)
+  4. Mock data                — always works as final fallback
 
 Parses tweets to extract:
   - Stock symbol / instrument name
@@ -20,10 +21,13 @@ Parses tweets to extract:
 import os
 import re
 import json
+import time
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,26 +36,84 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(me
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Search terms for Indian equity option recommendations
+# Twitter Guest Token — uses the same bearer token Twitter's own website uses
+# This allows free, unauthenticated search without any developer account
 # ---------------------------------------------------------------------------
 
-# Queries for ntscraper (hashtag / keyword based)
-NTSCRAPER_QUERIES = [
-    "BANKNIFTY CE PE target SL",
-    "NIFTY CE PE target SL",
-    "NSE CE PE buy target stoploss",
-    "#optionstrading NIFTY target SL",
-    "#BankNifty CE PE buy target",
-    "NIFTY50 CE PE intraday target",
-    "RELIANCE CE PE target SL buy",
-    "HDFCBANK CE PE target buy",
+# Twitter's public bearer token (same one used by twitter.com frontend)
+_TWITTER_PUBLIC_BEARER = (
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeRDkYzo%3D"
+    "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+)
+
+_GUEST_TOKEN: Optional[str] = None
+_GUEST_TOKEN_TS: float = 0.0
+_GUEST_TOKEN_TTL: float = 3600  # refresh every hour
+
+_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://twitter.com/",
+    "Origin": "https://twitter.com",
+}
+
+
+def _get_guest_token() -> Optional[str]:
+    """Obtain a Twitter guest token (valid ~1 hour)."""
+    global _GUEST_TOKEN, _GUEST_TOKEN_TS
+
+    now = time.time()
+    if _GUEST_TOKEN and (now - _GUEST_TOKEN_TS) < _GUEST_TOKEN_TTL:
+        return _GUEST_TOKEN
+
+    try:
+        resp = requests.post(
+            "https://api.twitter.com/1.1/guest/activate.json",
+            headers={
+                **_REQUEST_HEADERS,
+                "Authorization": f"Bearer {_TWITTER_PUBLIC_BEARER}",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        token = resp.json().get("guest_token")
+        if token:
+            _GUEST_TOKEN = token
+            _GUEST_TOKEN_TS = now
+            logger.info("[GuestToken] Obtained new guest token.")
+            return token
+    except Exception as exc:
+        logger.warning("[GuestToken] Failed to get guest token: %s", exc)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Search queries for Indian equity option tweets
+# ---------------------------------------------------------------------------
+
+SEARCH_QUERIES = [
+    "BANKNIFTY CE OR PE target SL buy -is:retweet",
+    "NIFTY CE OR PE target SL intraday -is:retweet",
+    "NIFTY OR BANKNIFTY CE PE buy target stoploss -is:retweet",
+    "#BankNifty CE PE buy target SL -is:retweet",
+    "#optionstrading NIFTY target SL -is:retweet",
+    "NSE CE PE buy target SL swing -is:retweet",
 ]
 
-# Queries for Twitter API v2 (Basic tier only)
-TWITTER_API_QUERIES = [
-    "(NIFTY OR BANKNIFTY) (CE OR PE) (target OR SL OR \"stop loss\") -is:retweet",
-    "(NSE OR BSE) (CE OR PE) (target OR SL OR buy) -is:retweet",
-    "(#optionstrading OR #BankNifty OR #NIFTY50) (target OR SL OR buy) -is:retweet",
+# Simpler queries for v1.1 search (no operators like -is:retweet)
+SEARCH_QUERIES_V1 = [
+    "BANKNIFTY CE PE target SL",
+    "NIFTY CE PE target SL intraday",
+    "BANKNIFTY CE buy target stoploss",
+    "NIFTY50 CE PE buy target SL",
+    "#BankNifty CE PE target SL",
+    "NSE options CE PE target SL",
 ]
 
 # ---------------------------------------------------------------------------
@@ -65,30 +127,24 @@ SYMBOL_PATTERN = re.compile(
     r"HINDUNILVR|ITC|LT|SUNPHARMA|DRREDDY|CIPLA|"
     r"TITAN|ADANIPORTS|ADANIENT|POWERGRID|NTPC|ONGC|"
     r"COALINDIA|TECHM|HCLTECH|ASIANPAINT|ULTRACEMCO|"
-    r"BAJAJFINSV|NESTLEIND|BRITANNIA|EICHERMOT|HEROMOTOCO|"
-    r"[A-Z]{3,10})\b",
+    r"BAJAJFINSV|NESTLEIND|BRITANNIA|EICHERMOT|HEROMOTOCO)\b",
     re.IGNORECASE,
 )
 
 OPTION_TYPE_PATTERN = re.compile(r"\b(CE|PE)\b", re.IGNORECASE)
-
-STRIKE_PATTERN = re.compile(r"\b(\d{4,6})\s*(CE|PE)\b", re.IGNORECASE)
-
-BUY_PRICE_PATTERN = re.compile(
+STRIKE_PATTERN      = re.compile(r"\b(\d{4,6})\s*(CE|PE)\b", re.IGNORECASE)
+BUY_PRICE_PATTERN   = re.compile(
     r"(?:buy(?:ing)?|entry|cmp|ltp|@)\s*(?:around|near|@|rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-
 TARGET_PATTERN = re.compile(
     r"(?:tgt|target|t1|t2|tp)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-
 SL_PATTERN = re.compile(
     r"(?:sl|stoploss|stop\s*loss|slw?)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-
 TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|for\s*today|eod)\b", re.IGNORECASE)
 TOMORROW_KEYWORDS = re.compile(r"\b(tomorrow|tmrw|next\s*day|positional\s*day)\b", re.IGNORECASE)
 MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|expiry|weekly|swing)\b", re.IGNORECASE)
@@ -97,12 +153,15 @@ EXPIRY_PATTERN    = re.compile(
     re.IGNORECASE,
 )
 
+# Detect retweet
+RT_PATTERN = re.compile(r"^RT\s+@", re.IGNORECASE)
+
+
 # ---------------------------------------------------------------------------
-# Core parser (shared by all fetching strategies)
+# Core parser
 # ---------------------------------------------------------------------------
 
 def parse_tweet(text: str) -> dict:
-    """Extract structured option data from raw tweet text."""
     text_upper = text.upper()
 
     strike_matches = STRIKE_PATTERN.findall(text_upper)
@@ -159,34 +218,162 @@ def determine_sentiment(option_type: Optional[str]) -> str:
     return "BULLISH" if option_type.upper() == "CE" else "BEARISH"
 
 
+def _build_author(user: dict) -> dict:
+    """Build a normalised author dict from Twitter v1.1 user object."""
+    return {
+        "name":              user.get("name", ""),
+        "handle":            f"@{user.get('screen_name', '')}",
+        "username":          user.get("screen_name", ""),
+        "followers":         user.get("followers_count", 0),
+        "following":         user.get("friends_count", 0),
+        "tweet_count":       user.get("statuses_count", 0),
+        "profile_image_url": user.get("profile_image_url_https", "").replace("_normal", "_400x400"),
+        "description":       user.get("description", ""),
+        "verified":          user.get("verified", False),
+    }
+
+
+def _parse_twitter_date(date_str: str) -> str:
+    """Convert Twitter date string to ISO format."""
+    try:
+        dt = datetime.strptime(date_str, "%a %b %d %H:%M:%S +0000 %Y")
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
 # ---------------------------------------------------------------------------
-# Strategy 1 — ntscraper (FREE, no API key required)
+# Strategy 1 — Twitter Guest Token (FREE, no developer account needed)
 # ---------------------------------------------------------------------------
+
+def fetch_via_guest_token(max_results: int = 50) -> list[dict]:
+    """
+    Search Twitter using the guest token API (Twitter v1.1 search/tweets.json).
+    Completely free — uses Twitter's own public bearer token that their website uses.
+    """
+    guest_token = _get_guest_token()
+    if not guest_token:
+        logger.warning("[GuestToken] Could not obtain guest token.")
+        return []
+
+    headers = {
+        **_REQUEST_HEADERS,
+        "Authorization":  f"Bearer {_TWITTER_PUBLIC_BEARER}",
+        "x-guest-token":  guest_token,
+        "x-twitter-client-language": "en",
+        "x-twitter-active-user": "yes",
+    }
+
+    results  = []
+    seen_ids = set()
+
+    for query in SEARCH_QUERIES_V1[:4]:
+        logger.info("[GuestToken] Searching: %s", query)
+        try:
+            resp = requests.get(
+                "https://api.twitter.com/1.1/search/tweets.json",
+                headers=headers,
+                params={
+                    "q":          query,
+                    "count":      min(max_results, 100),
+                    "tweet_mode": "extended",
+                    "lang":       "en",
+                    "result_type": "recent",
+                },
+                timeout=15,
+            )
+
+            if resp.status_code == 429:
+                logger.warning("[GuestToken] Rate limited. Sleeping 10s…")
+                time.sleep(10)
+                continue
+            if resp.status_code in (401, 403):
+                logger.warning("[GuestToken] Auth error %d — guest token expired, refreshing.", resp.status_code)
+                _GUEST_TOKEN = None
+                guest_token = _get_guest_token()
+                if guest_token:
+                    headers["x-guest-token"] = guest_token
+                continue
+            if not resp.ok:
+                logger.warning("[GuestToken] HTTP %d for query [%s]", resp.status_code, query)
+                continue
+
+            data = resp.json()
+            statuses = data.get("statuses", [])
+
+        except requests.RequestException as exc:
+            logger.warning("[GuestToken] Request failed [%s]: %s", query, exc)
+            continue
+
+        for tw in statuses:
+            tweet_id = str(tw.get("id_str", tw.get("id", "")))
+            if not tweet_id or tweet_id in seen_ids:
+                continue
+            seen_ids.add(tweet_id)
+
+            # Skip retweets
+            text = tw.get("full_text") or tw.get("text", "")
+            if RT_PATTERN.match(text):
+                continue
+
+            parsed = parse_tweet(text)
+            # Must have at least a symbol OR a strike price to be useful
+            if not parsed["symbol"] and not parsed["strike_price"]:
+                continue
+
+            user   = tw.get("user", {})
+            author = _build_author(user)
+
+            rec = {
+                "id":         tweet_id,
+                "text":       text,
+                "tweet_url":  f"https://x.com/{author['username']}/status/{tweet_id}",
+                "created_at": _parse_twitter_date(tw.get("created_at", "")),
+                **parsed,
+                "sentiment":  determine_sentiment(parsed.get("option_type")),
+                "likes":      tw.get("favorite_count", 0),
+                "retweets":   tw.get("retweet_count", 0),
+                "replies":    tw.get("reply_count", 0),
+                "author":     author,
+            }
+            results.append(rec)
+
+        # Small delay between queries to be respectful
+        time.sleep(random.uniform(0.5, 1.5))
+
+    logger.info("[GuestToken] Total parsed: %d", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2 — ntscraper (Nitter-based, works when Nitter instances are up)
+# ---------------------------------------------------------------------------
+
+NTSCRAPER_QUERIES = [
+    "BANKNIFTY CE PE target SL",
+    "NIFTY CE PE target SL",
+    "#BankNifty CE PE buy target",
+    "#optionstrading NIFTY target SL",
+]
+
 
 def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
-    """
-    Scrape tweets using ntscraper (Nitter-based, no API key needed).
-    Falls back gracefully if ntscraper is unavailable.
-    """
     try:
         from ntscraper import Nitter
-    except ImportError as e:
-        logger.warning("ntscraper/lxml not available (%s). Skipping ntscraper.", e)
-        return []
-    except Exception as e:
-        logger.warning("ntscraper import error: %s", e)
+    except (ImportError, Exception) as e:
+        logger.warning("[ntscraper] Not available: %s", e)
         return []
 
-    results = []
+    results  = []
     seen_ids = set()
 
     try:
         scraper = Nitter(log_level=1, skip_instance_check=True)
     except Exception as exc:
-        logger.warning("ntscraper init failed: %s", exc)
+        logger.warning("[ntscraper] Init failed: %s", exc)
         return []
 
-    for query in NTSCRAPER_QUERIES[:4]:   # limit queries to avoid rate limits
+    for query in NTSCRAPER_QUERIES[:3]:
         logger.info("[ntscraper] Searching: %s", query)
         try:
             tweets_data = scraper.get_tweets(query, mode="term", number=20)
@@ -209,28 +396,23 @@ def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
             if not parsed["symbol"] and not parsed["strike_price"]:
                 continue
 
-            # Author info from ntscraper
             user     = tw.get("user", {})
             username = user.get("username", "unknown")
             name     = user.get("name", username)
-            # ntscraper doesn't always return follower count; default 0
-            followers = int(user.get("followers", 0) or 0)
 
-            # Parse date
-            date_str = tw.get("date", "")
             try:
+                date_str   = tw.get("date", "")
                 created_at = datetime.strptime(date_str, "%b %d, %Y · %I:%M %p UTC")
-                created_at = created_at.replace(tzinfo=timezone.utc)
+                created_at = created_at.replace(tzinfo=timezone.utc).isoformat()
             except Exception:
-                created_at = datetime.now(timezone.utc)
+                created_at = datetime.now(timezone.utc).isoformat()
 
             stats = tw.get("stats", {})
-
             rec = {
                 "id":         tweet_id,
                 "text":       text,
                 "tweet_url":  tw.get("link", f"https://x.com/{username}"),
-                "created_at": created_at.isoformat(),
+                "created_at": created_at,
                 **parsed,
                 "sentiment":  determine_sentiment(parsed.get("option_type")),
                 "likes":      int(stats.get("likes", 0) or 0),
@@ -240,7 +422,7 @@ def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
                     "name":              name,
                     "handle":            f"@{username}",
                     "username":          username,
-                    "followers":         followers,
+                    "followers":         int(user.get("followers", 0) or 0),
                     "following":         int(user.get("following", 0) or 0),
                     "tweet_count":       int(user.get("tweets", 0) or 0),
                     "profile_image_url": user.get("avatar", ""),
@@ -255,61 +437,56 @@ def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2 — Twitter API v2 (requires Basic tier, $100/mo)
+# Strategy 3 — Twitter API v2 (requires paid Basic tier)
 # ---------------------------------------------------------------------------
 
-def get_twitter_client():
-    import tweepy
-    bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
-    if not bearer or bearer == "your_bearer_token_here":
-        raise ValueError("TWITTER_BEARER_TOKEN not set.")
-    return tweepy.Client(
-        bearer_token=bearer,
-        consumer_key=os.getenv("TWITTER_API_KEY"),
-        consumer_secret=os.getenv("TWITTER_API_SECRET"),
-        access_token=os.getenv("TWITTER_ACCESS_TOKEN"),
-        access_token_secret=os.getenv("TWITTER_ACCESS_TOKEN_SECRET"),
-        wait_on_rate_limit=True,
-    )
-
-
 def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
-    """
-    Fetch tweets using Twitter API v2.
-    Requires Basic tier ($100/month) for search_recent_tweets.
-    Returns empty list on 402/403 errors (free tier limitation).
-    """
     try:
         import tweepy
-        client = get_twitter_client()
-    except (ValueError, ImportError) as exc:
-        logger.warning("[Twitter API] Skipped: %s", exc)
+    except ImportError:
         return []
 
-    results = []
-    seen_ids: set = set()
+    bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
+    if not bearer or bearer == "your_bearer_token_here":
+        return []
 
-    for query in TWITTER_API_QUERIES:
-        logger.info("[Twitter API] Searching: %s", query)
+    try:
+        client = tweepy.Client(
+            bearer_token=bearer,
+            consumer_key=os.getenv("TWITTER_API_KEY"),
+            consumer_secret=os.getenv("TWITTER_API_SECRET"),
+            access_token=os.getenv("TWITTER_ACCESS_TOKEN"),
+            access_token_secret=os.getenv("TWITTER_ACCESS_TOKEN_SECRET"),
+            wait_on_rate_limit=True,
+        )
+    except Exception as exc:
+        logger.warning("[Twitter API v2] Client init failed: %s", exc)
+        return []
+
+    results  = []
+    seen_ids = set()
+    api_queries = [
+        "(NIFTY OR BANKNIFTY) (CE OR PE) (target OR SL) -is:retweet",
+        "(NSE OR BSE) (CE OR PE) (target OR buy) -is:retweet",
+    ]
+
+    for query in api_queries:
+        logger.info("[Twitter API v2] Searching: %s", query)
         try:
             response = client.search_recent_tweets(
                 query=query,
                 max_results=min(max_per_query, 100),
                 tweet_fields=["created_at", "public_metrics", "author_id"],
-                user_fields=["name", "username", "public_metrics", "profile_image_url",
-                             "description", "verified"],
+                user_fields=["name", "username", "public_metrics",
+                             "profile_image_url", "description", "verified"],
                 expansions=["author_id"],
             )
-        except tweepy.errors.Forbidden as exc:
-            logger.warning("[Twitter API] 403 Forbidden (need Basic tier): %s", exc)
-            break
-        except tweepy.errors.TweepyException as exc:
-            # 402 Payment Required also comes as TweepyException
+        except Exception as exc:
             msg = str(exc)
-            if "402" in msg or "403" in msg:
-                logger.warning("[Twitter API] Payment required (need Basic tier). Skipping API.")
+            if "402" in msg or "403" in msg or "Payment" in msg:
+                logger.warning("[Twitter API v2] 402/403 — Basic tier required. Skipping.")
                 break
-            logger.warning("[Twitter API] Error [%s]: %s", query, exc)
+            logger.warning("[Twitter API v2] Error [%s]: %s", query, exc)
             continue
 
         if not response or not response.data:
@@ -335,17 +512,14 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
             if tweet.id in seen_ids:
                 continue
             seen_ids.add(tweet.id)
-
             parsed = parse_tweet(tweet.text)
             if not parsed["symbol"] and not parsed["strike_price"]:
                 continue
-
             author  = user_lookup.get(tweet.author_id, {})
             metrics = tweet.public_metrics or {}
-            ca      = tweet.created_at
+            ca = tweet.created_at
             if ca and ca.tzinfo is None:
                 ca = ca.replace(tzinfo=timezone.utc)
-
             rec = {
                 "id":         str(tweet.id),
                 "text":       tweet.text,
@@ -360,43 +534,49 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
             }
             results.append(rec)
 
-    logger.info("[Twitter API] Total parsed: %d", len(results))
+    logger.info("[Twitter API v2] Total parsed: %d", len(results))
     return results
 
 
 # ---------------------------------------------------------------------------
-# Main entry point — tries each strategy in order
+# Main entry point
 # ---------------------------------------------------------------------------
 
 def fetch_recommendations(max_results: int = 50) -> list[dict]:
     """
-    Fetch option recommendations using the best available method:
-      1. ntscraper (free, no API key)
-      2. Twitter API v2 (paid Basic tier)
-      3. Returns empty list (caller falls back to mock data)
+    Fetch option recommendations using best available method:
+      1. Twitter Guest Token API (free, no key needed)
+      2. ntscraper via Nitter (free, depends on Nitter uptime)
+      3. Twitter API v2 (paid Basic tier only)
+    Returns [] if all strategies fail — caller falls back to mock data.
     """
-    # --- Strategy 1: ntscraper (free) ---
-    logger.info("Trying ntscraper (free, no API key)…")
-    data = fetch_via_ntscraper(max_results)
+    # Strategy 1: Guest Token (most reliable free method)
+    logger.info("Strategy 1: Twitter Guest Token API…")
+    data = fetch_via_guest_token(max_results)
     if data:
-        logger.info("ntscraper returned %d results.", len(data))
+        logger.info("Guest Token strategy succeeded: %d results.", len(data))
         return data
 
-    # --- Strategy 2: Twitter API v2 ---
-    bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
-    if bearer and bearer != "your_bearer_token_here":
-        logger.info("ntscraper empty — trying Twitter API v2…")
-        data = fetch_via_twitter_api(max_results)
-        if data:
-            logger.info("Twitter API returned %d results.", len(data))
-            return data
+    # Strategy 2: ntscraper
+    logger.info("Strategy 2: ntscraper (Nitter)…")
+    data = fetch_via_ntscraper(max_results)
+    if data:
+        logger.info("ntscraper strategy succeeded: %d results.", len(data))
+        return data
 
-    logger.info("All fetch strategies exhausted — using mock data.")
+    # Strategy 3: Twitter API v2
+    logger.info("Strategy 3: Twitter API v2…")
+    data = fetch_via_twitter_api(max_results)
+    if data:
+        logger.info("Twitter API v2 strategy succeeded: %d results.", len(data))
+        return data
+
+    logger.warning("All fetch strategies exhausted.")
     return []
 
 
 # ---------------------------------------------------------------------------
-# Demo / mock data (final fallback)
+# Mock data (always reliable fallback)
 # ---------------------------------------------------------------------------
 
 def get_mock_data() -> list[dict]:
@@ -512,7 +692,6 @@ def get_mock_data() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Standalone test
 # ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     data = fetch_recommendations()
     if not data:
