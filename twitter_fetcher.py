@@ -4,10 +4,9 @@ twitter_fetcher.py
 Fetches stock option recommendation posts for Indian equity markets (NSE/BSE).
 
 Strategy (in order):
-  1. twscrape  — scrapes real Twitter using a free Twitter account (most reliable)
-  2. StockTwits — free public API, no key needed
-  3. Reddit     — public JSON API, no key needed  
-  4. Mock data  — always works as final fallback
+  1. twscrape      — scrapes real Twitter using a free Twitter account (most reliable)
+  2. Twitter API v2 — paid Basic tier (optional fallback)
+  3. Mock data      — always works as final fallback
 
 For twscrape, set these in Railway environment variables:
   TWITTER_USERNAME       = your_twitter_username
@@ -172,7 +171,7 @@ def determine_sentiment(option_type: Optional[str], hint: str = "") -> str:
     return "BULLISH" if option_type.upper() == "CE" else "BEARISH"
 
 
-# Extended option keywords for StockTwits/Reddit which use different terminology
+# Extended option keywords for broader post matching
 _OPTION_KEYWORDS = re.compile(
     r"\b(CE|PE|call\s*option|put\s*option|call|put|options?\s*trade|F&O|FnO|intraday|swing|positional)\b",
     re.IGNORECASE,
@@ -183,7 +182,7 @@ def _is_option_post(text: str, strict: bool = True) -> bool:
     """
     True if the post looks like an option trade recommendation.
     strict=True  → requires CE/PE + symbol (for Twitter where signal:noise is low)
-    strict=False → accepts any option-related post with a symbol (for StockTwits/Reddit)
+    strict=False → accepts any option-related post with a known symbol
     """
     has_symbol = bool(SYMBOL_PATTERN.search(text)) or bool(STRIKE_PATTERN.search(text))
     if strict:
@@ -386,222 +385,7 @@ def fetch_via_twscrape(max_results: int = 60) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2 — StockTwits Public API (free, no key)
-# ---------------------------------------------------------------------------
-
-STOCKTWITS_SYMBOLS = [
-    "NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY",
-    "RELIANCE", "HDFCBANK", "TCS", "INFY", "WIPRO",
-    "SBIN", "ICICIBANK", "TATAMOTORS", "AXISBANK", "KOTAKBANK",
-    "BAJFINANCE", "BAJAJFINSV", "LT", "HINDUNILVR", "ITC",
-    "SUNPHARMA", "DRREDDY", "CIPLA", "TITAN", "ADANIPORTS",
-    "ADANIENT", "HCLTECH", "TECHM", "MARUTI", "ASIANPAINT",
-    "NTPC", "POWERGRID", "ONGC", "COALINDIA",
-]
-
-
-def fetch_via_stocktwits(max_results: int = 60) -> list[dict]:
-    results  = []
-    seen_ids = set()
-
-    def _proc(msg: dict) -> Optional[dict]:
-        mid = str(msg.get("id", ""))
-        if not mid or mid in seen_ids:
-            return None
-        seen_ids.add(mid)
-        body = msg.get("body", "")
-        if not body or not _is_option_post(body, strict=False):
-            return None
-        parsed    = parse_text(body)
-        user      = msg.get("user", {})
-        entities  = msg.get("entities") or {}
-        sentiment = (entities.get("sentiment") or {}).get("basic", "")
-        username  = user.get("username", "stocktwits_user")
-        try:
-            created_at = datetime.strptime(
-                msg.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=timezone.utc).isoformat()
-        except Exception:
-            created_at = datetime.now(timezone.utc).isoformat()
-        return {
-            "id":         f"st_{mid}",
-            "text":       body,
-            "tweet_url":  f"https://stocktwits.com/{username}/message/{mid}",
-            "created_at": created_at,
-            **parsed,
-            "sentiment":  determine_sentiment(parsed.get("option_type"), sentiment),
-            "likes":      (msg.get("likes") or {}).get("total", 0),
-            "retweets":   0,
-            "replies":    0,
-            "author": {
-                "name":              user.get("name", username),
-                "handle":            f"@{username}",
-                "username":          username,
-                "followers":         user.get("followers", 0) or 0,
-                "following":         user.get("following", 0) or 0,
-                "tweet_count":       user.get("ideas", 0) or 0,
-                "profile_image_url": user.get("avatar_url_ssl", "") or "",
-                "description":       user.get("classification", "StockTwits trader"),
-                "verified":          bool(user.get("official", False)),
-            },
-            "source": "stocktwits",
-        }
-
-    for symbol in STOCKTWITS_SYMBOLS:
-        if len(results) >= max_results:
-            break
-        logger.info("[StockTwits] Symbol stream: %s", symbol)
-        try:
-            resp = requests.get(
-                f"https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json",
-                headers=_BASE_HEADERS, timeout=10,
-            )
-            if resp.status_code == 429:
-                time.sleep(5); continue
-            if not resp.ok:
-                continue
-            for msg in resp.json().get("messages", []):
-                rec = _proc(msg)
-                if rec:
-                    results.append(rec)
-        except Exception as exc:
-            logger.warning("[StockTwits] Failed [%s]: %s", symbol, exc)
-        time.sleep(random.uniform(0.3, 0.7))
-
-    logger.info("[StockTwits] Total: %d", len(results))
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Strategy 3 — Reddit Public API (free, needs OAuth app for server env)
-# ---------------------------------------------------------------------------
-
-_REDDIT_CLIENT_ID     = os.getenv("REDDIT_CLIENT_ID", "")
-_REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
-_REDDIT_TOKEN: dict   = {}
-
-
-def _get_reddit_token() -> Optional[str]:
-    global _REDDIT_TOKEN
-    if not _REDDIT_CLIENT_ID or not _REDDIT_CLIENT_SECRET:
-        return None
-    now = time.time()
-    if _REDDIT_TOKEN.get("token") and now < _REDDIT_TOKEN.get("expires", 0):
-        return _REDDIT_TOKEN["token"]
-    try:
-        resp = requests.post(
-            "https://www.reddit.com/api/v1/access_token",
-            auth=(_REDDIT_CLIENT_ID, _REDDIT_CLIENT_SECRET),
-            data={"grant_type": "client_credentials"},
-            headers={"User-Agent": "OptionSignalsIndia/1.0"},
-            timeout=10,
-        )
-        if resp.ok:
-            d = resp.json()
-            _REDDIT_TOKEN = {
-                "token":   d.get("access_token"),
-                "expires": now + d.get("expires_in", 3600) - 60,
-            }
-            return _REDDIT_TOKEN["token"]
-    except Exception as exc:
-        logger.warning("[Reddit] Token error: %s", exc)
-    return None
-
-
-REDDIT_SUBREDDITS  = ["IndianStockMarket", "IndiaInvestments", "NSEbets", "Nifty", "IndianStreetBets", "DalalStreetTalks"]
-REDDIT_SEARCHES    = [
-    "NIFTY CE PE target",
-    "BANKNIFTY option call target SL",
-    "NSE options intraday CE PE buy",
-    "stock options India target stoploss",
-    "FINNIFTY weekly CE PE",
-]
-
-
-def fetch_via_reddit(max_results: int = 40) -> list[dict]:
-    token   = _get_reddit_token()
-    headers = {"User-Agent": "OptionSignalsIndia/1.0"}
-    base    = "https://oauth.reddit.com" if token else "https://www.reddit.com"
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    results  = []
-    seen_ids = set()
-
-    def _proc(post: dict) -> Optional[dict]:
-        pid = post.get("id", "")
-        if not pid or pid in seen_ids:
-            return None
-        seen_ids.add(pid)
-        title = post.get("title", "")
-        body  = post.get("selftext", "") or ""
-        text  = f"{title}\n{body}".strip()
-        if not text or not _is_option_post(text):
-            return None
-        parsed    = parse_text(text)
-        author    = post.get("author", "redditor")
-        subreddit = post.get("subreddit", "")
-        try:
-            created_at = datetime.fromtimestamp(
-                post.get("created_utc", 0), tz=timezone.utc
-            ).isoformat()
-        except Exception:
-            created_at = datetime.now(timezone.utc).isoformat()
-        permalink = post.get("permalink", "")
-        return {
-            "id":         f"reddit_{pid}",
-            "text":       text[:600],
-            "tweet_url":  f"https://reddit.com{permalink}",
-            "created_at": created_at,
-            **parsed,
-            "sentiment":  determine_sentiment(parsed.get("option_type")),
-            "likes":      post.get("score", 0) or 0,
-            "retweets":   0,
-            "replies":    post.get("num_comments", 0) or 0,
-            "author": {
-                "name":              author,
-                "handle":            f"u/{author}",
-                "username":          author,
-                "followers":         post.get("author_karma", 0) or 0,
-                "following":         0, "tweet_count": 0,
-                "profile_image_url": "",
-                "description":       f"Reddit u/{author} · r/{subreddit}",
-                "verified":          False,
-            },
-            "source": "reddit",
-        }
-
-    for sub in REDDIT_SUBREDDITS[:5]:
-        for term in REDDIT_SEARCHES[:4]:
-            if len(results) >= max_results:
-                break
-            logger.info("[Reddit] r/%s search: %s", sub, term)
-            try:
-                resp = requests.get(
-                    f"{base}/r/{sub}/search.json",
-                    headers=headers,
-                    params={"q": term, "sort": "new", "limit": 25, "restrict_sr": "true"},
-                    timeout=12,
-                )
-                if resp.status_code in (401, 403):
-                    logger.warning("[Reddit] %d on r/%s — need OAuth credentials", resp.status_code, sub)
-                    break
-                if not resp.ok:
-                    continue
-                for post in resp.json().get("data", {}).get("children", []):
-                    rec = _proc(post.get("data", {}))
-                    if rec:
-                        results.append(rec)
-            except Exception as exc:
-                logger.warning("[Reddit] Failed [r/%s]: %s", sub, exc)
-            time.sleep(random.uniform(0.4, 0.8))
-
-    logger.info("[Reddit] Total: %d", len(results))
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Strategy 4 — Twitter API v2 (paid — optional fallback)
+# Strategy 2 — Twitter API v2 (paid — optional fallback)
 # ---------------------------------------------------------------------------
 
 def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
@@ -677,12 +461,10 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
 
 def fetch_recommendations(max_results: int = 150) -> list[dict]:
     """
-    Fetch option recommendations — tries all strategies and combines results:
-      1. twscrape  (needs TWITTER_USERNAME/PASSWORD/EMAIL env vars — free account)
-      2. StockTwits (free, no key)
-      3. Reddit    (free, add REDDIT_CLIENT_ID/SECRET for server env)
-      4. Twitter API v2 (paid Basic tier)
-    Combines results from all available sources for maximum data coverage.
+    Fetch option recommendations from Twitter only — tries in order:
+      1. twscrape      (set TWITTER_USERNAME + credentials in env vars)
+      2. Twitter API v2 (set TWITTER_BEARER_TOKEN — paid Basic tier)
+    Falls back to mock data (handled by the caller) if both fail.
     """
     combined: list[dict] = []
     seen_ids: set = set()
@@ -697,7 +479,7 @@ def fetch_recommendations(max_results: int = 150) -> list[dict]:
     # Strategy 1: twscrape
     username = os.getenv("TWITTER_USERNAME", "")
     if username:
-        logger.info("Strategy 1: twscrape (account: %s)…", username)
+        logger.info("Strategy 1: twscrape (account: %s)...", username)
         data = fetch_via_twscrape(max_results)
         if data:
             logger.info("twscrape: %d results.", len(data))
@@ -705,34 +487,20 @@ def fetch_recommendations(max_results: int = 150) -> list[dict]:
     else:
         logger.info("Strategy 1: twscrape skipped (no TWITTER_USERNAME set).")
 
-    # Strategy 2: StockTwits (always run to augment)
-    logger.info("Strategy 2: StockTwits Public API…")
-    data = fetch_via_stocktwits(max_results)
-    if data:
-        logger.info("StockTwits: %d results.", len(data))
-        _merge(data)
-
-    # Strategy 3: Reddit (always run to augment)
-    logger.info("Strategy 3: Reddit API…")
-    data = fetch_via_reddit(max_results)
-    if data:
-        logger.info("Reddit: %d results.", len(data))
-        _merge(data)
-
-    # Strategy 4: Twitter API v2
+    # Strategy 2: Twitter API v2
     bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
     if bearer and bearer != "your_bearer_token_here":
-        logger.info("Strategy 4: Twitter API v2…")
+        logger.info("Strategy 2: Twitter API v2...")
         data = fetch_via_twitter_api(max_results)
         if data:
             logger.info("Twitter API v2: %d results.", len(data))
             _merge(data)
 
     if combined:
-        logger.info("Total combined recommendations: %d", len(combined))
+        logger.info("Total recommendations fetched: %d", len(combined))
         return combined
 
-    logger.warning("All fetch strategies exhausted.")
+    logger.warning("All Twitter fetch strategies exhausted.")
     return []
 
 
