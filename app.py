@@ -77,9 +77,13 @@ def _load_data(force: bool = False) -> list:
         return _CACHE["data"]
 
 
-def _filter_data(data: list, horizon: str | None) -> list:
+def _filter_data(data: list, horizon: str | None, instrument_type: str | None = None, expiry_type: str | None = None) -> list:
     if horizon and horizon in ("today", "tomorrow", "monthly"):
-        return [r for r in data if r.get("horizon") == horizon]
+        data = [r for r in data if r.get("horizon") == horizon]
+    if instrument_type and instrument_type in ("index", "stock"):
+        data = [r for r in data if r.get("instrument_type") == instrument_type]
+    if expiry_type and expiry_type in ("weekly", "monthly"):
+        data = [r for r in data if r.get("expiry_type") == expiry_type]
     return data
 
 
@@ -123,12 +127,14 @@ _refresh_thread.start()
 
 @app.route("/api/recommendations")
 def api_recommendations():
-    horizon = request.args.get("horizon")        # today | tomorrow | monthly | None
-    sort_by = request.args.get("sort", "followers")  # followers | engagement
-    search  = request.args.get("q", "").strip().upper()
+    horizon         = request.args.get("horizon")          # today | tomorrow | monthly | None
+    sort_by         = request.args.get("sort", "followers")   # followers | engagement
+    search          = request.args.get("q", "").strip().upper()
+    instrument_type = request.args.get("instrument_type")   # index | stock | None
+    expiry_type     = request.args.get("expiry_type")        # weekly | monthly | None
 
     data = _load_data()
-    data = _filter_data(data, horizon)
+    data = _filter_data(data, horizon, instrument_type, expiry_type)
 
     if search:
         data = [
@@ -168,6 +174,10 @@ def api_stats():
     monthly_cnt   = sum(1 for r in data if r.get("horizon") == "monthly")
     bullish_cnt   = sum(1 for r in data if r.get("sentiment") == "BULLISH")
     bearish_cnt   = sum(1 for r in data if r.get("sentiment") == "BEARISH")
+    index_cnt     = sum(1 for r in data if r.get("instrument_type") == "index")
+    stock_cnt     = sum(1 for r in data if r.get("instrument_type") == "stock")
+    weekly_cnt    = sum(1 for r in data if r.get("expiry_type") == "weekly")
+    monthly_exp_cnt = sum(1 for r in data if r.get("expiry_type") == "monthly")
 
     top_authors = {}
     for r in data:
@@ -194,6 +204,10 @@ def api_stats():
         "monthly": monthly_cnt,
         "bullish": bullish_cnt,
         "bearish": bearish_cnt,
+        "index_count": index_cnt,
+        "stock_count": stock_cnt,
+        "weekly_count": weekly_cnt,
+        "monthly_expiry_count": monthly_exp_cnt,
         "top_authors": top_authors_list,
         "is_mock": _CACHE["is_mock"],
         "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,

@@ -38,8 +38,13 @@ logger = logging.getLogger(__name__)
 # Regex patterns (shared across all sources)
 # ---------------------------------------------------------------------------
 
+INDEX_SYMBOLS = {
+    "NIFTY", "NIFTY50", "BANKNIFTY", "NIFTYBANK", "SENSEX",
+    "NIFTYIT", "NIFTYMIDCAP", "FINNIFTY", "MIDCPNIFTY",
+}
+
 SYMBOL_PATTERN = re.compile(
-    r"\b(NIFTY(?:50|BANK|IT|MIDCAP)?|BANKNIFTY|SENSEX|"
+    r"\b(NIFTY(?:50|BANK|IT|MIDCAP)?|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX|"
     r"RELIANCE|HDFCBANK|TCS|INFY|WIPRO|ICICIBANK|SBIN|"
     r"BAJFINANCE|AXISBANK|KOTAKBANK|TATAMOTORS|MARUTI|"
     r"HINDUNILVR|ITC|LT|SUNPHARMA|DRREDDY|CIPLA|"
@@ -51,20 +56,22 @@ SYMBOL_PATTERN = re.compile(
 OPTION_TYPE_PATTERN = re.compile(r"\b(CE|PE)\b", re.IGNORECASE)
 STRIKE_PATTERN      = re.compile(r"\b(\d{4,6})\s*(CE|PE)\b", re.IGNORECASE)
 BUY_PRICE_PATTERN   = re.compile(
-    r"(?:buy(?:ing)?|entry|cmp|ltp|@)\s*(?:around|near|@|rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
+    r"(?:buy(?:ing)?|entry|cmp|ltp|@|above|near|around)\s*[:\-]?\s*(?:rs\.?|₹|inr)?\s*(\d+(?:\.\d+)?)"
+    r"|(?:rs\.?|₹)\s*(\d+(?:\.\d+)?)\s*(?:buy|entry|ce|pe)",
     re.IGNORECASE,
 )
 TARGET_PATTERN = re.compile(
-    r"(?:tgt|target|t1|t2|tp)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
+    r"(?:tgt|target|t1|t2|tp|tg)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 SL_PATTERN = re.compile(
-    r"(?:sl|stoploss|stop\s*loss|slw?)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
+    r"(?:sl|stoploss|stop[\s\-]?loss|slw?|trail)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|eod)\b", re.IGNORECASE)
 TOMORROW_KEYWORDS = re.compile(r"\b(tomorrow|tmrw|next\s*day|positional\s*day)\b", re.IGNORECASE)
-MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|expiry|weekly|swing)\b", re.IGNORECASE)
+MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|monthly\s*expiry|swing)\b", re.IGNORECASE)
+WEEKLY_KEYWORDS   = re.compile(r"\b(weekly|week\s*expiry|this\s*week|weekly\s*expiry)\b", re.IGNORECASE)
 EXPIRY_PATTERN    = re.compile(
     r"\b(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2})?)\b",
     re.IGNORECASE,
@@ -94,20 +101,50 @@ def parse_text(text: str) -> dict:
             seen.add(s); symbols.append(s)
     symbol = symbols[0] if symbols else None
     bm = BUY_PRICE_PATTERN.findall(text)
-    buy_price = float(bm[0]) if bm else None
+    # BUY_PRICE_PATTERN has two groups; pick the non-empty one
+    buy_price = None
+    for match_groups in bm:
+        if isinstance(match_groups, tuple):
+            val = next((g for g in match_groups if g), None)
+        else:
+            val = match_groups
+        if val:
+            try:
+                buy_price = float(val)
+                break
+            except ValueError:
+                pass
     targets   = [float(t) for t in TARGET_PATTERN.findall(text)[:2]]
     sm = SL_PATTERN.findall(text)
     stop_loss = float(sm[0]) if sm else None
     if TODAY_KEYWORDS.search(text):       horizon = "today"
     elif TOMORROW_KEYWORDS.search(text):  horizon = "tomorrow"
     elif MONTHLY_KEYWORDS.search(text):   horizon = "monthly"
+    elif WEEKLY_KEYWORDS.search(text):    horizon = "today"
     else: horizon = "monthly" if EXPIRY_PATTERN.search(text_upper) else "today"
     expiry_m = EXPIRY_PATTERN.search(text_upper)
+
+    # Determine instrument type: index or stock
+    symbol_upper = (symbol or "").upper()
+    instrument_type = "index" if symbol_upper in INDEX_SYMBOLS else "stock"
+
+    # Determine expiry type for index options
+    if instrument_type == "index":
+        if WEEKLY_KEYWORDS.search(text) or (horizon in ("today", "tomorrow")):
+            expiry_type = "weekly"
+        elif MONTHLY_KEYWORDS.search(text) or horizon == "monthly":
+            expiry_type = "monthly"
+        else:
+            expiry_type = "weekly"  # default for index: weekly
+    else:
+        expiry_type = None
+
     return {
         "symbol": symbol, "strike_price": strike_price,
         "option_type": option_type, "buy_price": buy_price,
         "targets": targets, "stop_loss": stop_loss,
         "horizon": horizon, "expiry": expiry_m.group(1) if expiry_m else None,
+        "instrument_type": instrument_type, "expiry_type": expiry_type,
     }
 
 
@@ -652,36 +689,40 @@ def get_mock_data() -> list[dict]:
     return [
         {"id":"mock_001","source":"demo","text":"🔥 BANKNIFTY 51000 CE Buy @ 180-190\n🎯 Target: T1-240, T2-300\n🛑 SL: 140\nFor Today Intraday\n#BankNifty #NSE",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"BANKNIFTY","strike_price":"51000","option_type":"CE","buy_price":185.0,"targets":[240.0,300.0],"stop_loss":140.0,"horizon":"today","expiry":"08AUG","sentiment":"BULLISH","likes":342,"retweets":87,"replies":23,
+         "symbol":"BANKNIFTY","strike_price":"51000","option_type":"CE","buy_price":185.0,"targets":[240.0,300.0],"stop_loss":140.0,"horizon":"today","expiry":"08AUG","sentiment":"BULLISH","likes":342,"retweets":87,"replies":23,"instrument_type":"index","expiry_type":"weekly",
          "author":{"name":"NSE Options Guru","handle":"@NSEOptionsGuru","username":"NSEOptionsGuru","followers":125430,"following":870,"tweet_count":18540,"profile_image_url":"","description":"SEBI Registered | Option Trader | NSE/BSE","verified":True}},
         {"id":"mock_002","source":"demo","text":"NIFTY 24500 PE Buy near 95-100\nTgt 140/175 SL 70\nIntraday today\n#NIFTY50",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"NIFTY","strike_price":"24500","option_type":"PE","buy_price":97.5,"targets":[140.0,175.0],"stop_loss":70.0,"horizon":"today","expiry":"08AUG","sentiment":"BEARISH","likes":189,"retweets":45,"replies":12,
+         "symbol":"NIFTY","strike_price":"24500","option_type":"PE","buy_price":97.5,"targets":[140.0,175.0],"stop_loss":70.0,"horizon":"today","expiry":"08AUG","sentiment":"BEARISH","likes":189,"retweets":45,"replies":12,"instrument_type":"index","expiry_type":"weekly",
          "author":{"name":"Rahul Option Trader","handle":"@RahulOptionTrader","username":"RahulOptionTrader","followers":67200,"following":1200,"tweet_count":9800,"profile_image_url":"","description":"Intraday & Positional NSE trader","verified":False}},
         {"id":"mock_003","source":"demo","text":"📈 RELIANCE 3100 CE buy @55 for tomorrow\nT1:80 T2:110 SL:38\n#Reliance #NSE",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"RELIANCE","strike_price":"3100","option_type":"CE","buy_price":55.0,"targets":[80.0,110.0],"stop_loss":38.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BULLISH","likes":521,"retweets":134,"replies":41,
+         "symbol":"RELIANCE","strike_price":"3100","option_type":"CE","buy_price":55.0,"targets":[80.0,110.0],"stop_loss":38.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BULLISH","likes":521,"retweets":134,"replies":41,"instrument_type":"stock","expiry_type":None,
          "author":{"name":"Stock Market India","handle":"@StockMarketIndia","username":"StockMarketIndia","followers":312000,"following":540,"tweet_count":32100,"profile_image_url":"","description":"Premium Option Tips | SEBI Reg RA","verified":True}},
         {"id":"mock_004","source":"demo","text":"HDFCBANK 1700 PE @28 tomorrow SL 20 Tgt 45/65\n#HDFCBANK #NSE",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"HDFCBANK","strike_price":"1700","option_type":"PE","buy_price":28.0,"targets":[45.0,65.0],"stop_loss":20.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BEARISH","likes":98,"retweets":22,"replies":8,
+         "symbol":"HDFCBANK","strike_price":"1700","option_type":"PE","buy_price":28.0,"targets":[45.0,65.0],"stop_loss":20.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BEARISH","likes":98,"retweets":22,"replies":8,"instrument_type":"stock","expiry_type":None,
          "author":{"name":"Priya Sharma Trading","handle":"@PriyaSharmaTrading","username":"PriyaSharmaTrading","followers":44100,"following":320,"tweet_count":5600,"profile_image_url":"","description":"Technical Analyst | 7+ yrs NSE","verified":False}},
         {"id":"mock_005","source":"demo","text":"Monthly: TATAMOTORS 900 CE @35 Expiry 28SEP T1 60 T2 90 SL 22\n#TataMotors #Swing",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"TATAMOTORS","strike_price":"900","option_type":"CE","buy_price":35.0,"targets":[60.0,90.0],"stop_loss":22.0,"horizon":"monthly","expiry":"28SEP","sentiment":"BULLISH","likes":734,"retweets":201,"replies":67,
+         "symbol":"TATAMOTORS","strike_price":"900","option_type":"CE","buy_price":35.0,"targets":[60.0,90.0],"stop_loss":22.0,"horizon":"monthly","expiry":"28SEP","sentiment":"BULLISH","likes":734,"retweets":201,"replies":67,"instrument_type":"stock","expiry_type":None,
          "author":{"name":"Vikram Option Expert","handle":"@VikramOptionExpert","username":"VikramOptionExpert","followers":189500,"following":680,"tweet_count":24300,"profile_image_url":"","description":"SEBI RA | NIFTY BANKNIFTY swing trader","verified":True}},
         {"id":"mock_006","source":"demo","text":"BANKNIFTY 51500 PE at 145 SL 110 T1 185 T2 230 EOD today\n#BankNifty",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"BANKNIFTY","strike_price":"51500","option_type":"PE","buy_price":145.0,"targets":[185.0,230.0],"stop_loss":110.0,"horizon":"today","expiry":"08AUG","sentiment":"BEARISH","likes":267,"retweets":58,"replies":19,
+         "symbol":"BANKNIFTY","strike_price":"51500","option_type":"PE","buy_price":145.0,"targets":[185.0,230.0],"stop_loss":110.0,"horizon":"today","expiry":"08AUG","sentiment":"BEARISH","likes":267,"retweets":58,"replies":19,"instrument_type":"index","expiry_type":"weekly",
          "author":{"name":"Amit Kapoor FnO","handle":"@AmitKapoorFnO","username":"AmitKapoorFnO","followers":88700,"following":980,"tweet_count":14200,"profile_image_url":"","description":"F&O Trader | BankNifty specialist","verified":False}},
         {"id":"mock_007","source":"demo","text":"INFY 1850 CE Monthly Buy @42 Expiry 28AUG T1:68 T2:95 SL:28\n#Infosys",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"INFY","strike_price":"1850","option_type":"CE","buy_price":42.0,"targets":[68.0,95.0],"stop_loss":28.0,"horizon":"monthly","expiry":"28AUG","sentiment":"BULLISH","likes":412,"retweets":93,"replies":31,
+         "symbol":"INFY","strike_price":"1850","option_type":"CE","buy_price":42.0,"targets":[68.0,95.0],"stop_loss":28.0,"horizon":"monthly","expiry":"28AUG","sentiment":"BULLISH","likes":412,"retweets":93,"replies":31,"instrument_type":"stock","expiry_type":None,
          "author":{"name":"IT Sector Expert","handle":"@ITSectorExpert","username":"ITSectorExpert","followers":55600,"following":410,"tweet_count":7900,"profile_image_url":"","description":"IT sector analyst | NSE options","verified":False}},
-        {"id":"mock_008","source":"demo","text":"NIFTY 24800 CE Tomorrow Entry 65-70 Target 100/140 SL 45\n#NIFTY",
+        {"id":"mock_008","source":"demo","text":"NIFTY 24800 CE Monthly Entry 65-70 Target 100/140 SL 45 monthly expiry\n#NIFTY",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
-         "symbol":"NIFTY","strike_price":"24800","option_type":"CE","buy_price":67.5,"targets":[100.0,140.0],"stop_loss":45.0,"horizon":"tomorrow","expiry":"08AUG","sentiment":"BULLISH","likes":156,"retweets":38,"replies":14,
+         "symbol":"NIFTY","strike_price":"24800","option_type":"CE","buy_price":67.5,"targets":[100.0,140.0],"stop_loss":45.0,"horizon":"monthly","expiry":"29AUG","sentiment":"BULLISH","likes":156,"retweets":38,"replies":14,"instrument_type":"index","expiry_type":"monthly",
          "author":{"name":"Nifty Positional Calls","handle":"@NiftyPositional","username":"NiftyPositional","followers":38900,"following":290,"tweet_count":6100,"profile_image_url":"","description":"Positional option calls | Nifty & Bank Nifty","verified":False}},
+        {"id":"mock_009","source":"demo","text":"FINNIFTY 22000 CE Buy 85-90 weekly expiry SL 62 TGT 130 T2 165\n#FINNifty #Weekly",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"FINNIFTY","strike_price":"22000","option_type":"CE","buy_price":87.0,"targets":[130.0,165.0],"stop_loss":62.0,"horizon":"today","expiry":"08AUG","sentiment":"BULLISH","likes":98,"retweets":21,"replies":7,"instrument_type":"index","expiry_type":"weekly",
+         "author":{"name":"FinNifty Trader","handle":"@FinNiftyTrader","username":"FinNiftyTrader","followers":29800,"following":310,"tweet_count":4200,"profile_image_url":"","description":"FINNIFTY weekly options specialist","verified":False}},
     ]
 
 

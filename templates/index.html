@@ -451,7 +451,109 @@
       padding: 24px 28px;
       display: flex;
       flex-direction: column;
-      gap: 24px;
+      gap: 20px;
+    }
+
+    /* ── Instrument type top-level tabs ── */
+    .instrument-tabs-wrap {
+      display: flex;
+      gap: 10px;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 0;
+    }
+
+    .instr-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 24px;
+      border: none;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 700;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: all 0.2s;
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+      white-space: nowrap;
+    }
+
+    .instr-tab.active {
+      color: var(--text-primary);
+      border-bottom-color: var(--accent-blue);
+      background: rgba(59,130,246,0.07);
+    }
+
+    .instr-tab:not(.active):hover {
+      color: var(--text-primary);
+      background: rgba(255,255,255,0.04);
+    }
+
+    .instr-tab-count {
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: rgba(59,130,246,0.15);
+      color: var(--accent-blue);
+    }
+
+    .instr-tab.stock-tab .instr-tab-count {
+      background: rgba(139,92,246,0.15);
+      color: var(--accent-purple);
+    }
+
+    /* ── Index expiry sub-tabs ── */
+    .expiry-subtabs-wrap {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0 4px;
+    }
+
+    .expiry-subtabs-wrap.visible { display: flex; }
+
+    .expiry-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-right: 4px;
+    }
+
+    .expiry-tab {
+      padding: 6px 18px;
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 700;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .expiry-tab.active.weekly {
+      background: rgba(6,182,212,0.15);
+      border-color: rgba(6,182,212,0.5);
+      color: var(--accent-cyan);
+    }
+
+    .expiry-tab.active.monthly {
+      background: rgba(245,158,11,0.15);
+      border-color: rgba(245,158,11,0.5);
+      color: var(--accent-orange);
+    }
+
+    .expiry-tab:not(.active):hover {
+      background: rgba(255,255,255,0.05);
+      color: var(--text-primary);
     }
 
     /* Filter bar */
@@ -950,6 +1052,47 @@
       padding: 2px 8px;
     }
 
+    .expiry-type-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 99px;
+      letter-spacing: 0.5px;
+    }
+
+    .expiry-type-badge.weekly {
+      background: rgba(6,182,212,0.12);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6,182,212,0.3);
+    }
+
+    .expiry-type-badge.monthly {
+      background: rgba(245,158,11,0.12);
+      color: var(--accent-orange);
+      border: 1px solid rgba(245,158,11,0.3);
+    }
+
+    .instrument-badge {
+      font-size: 9px;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 4px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .instrument-badge.index {
+      background: rgba(59,130,246,0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(59,130,246,0.3);
+    }
+
+    .instrument-badge.stock {
+      background: rgba(139,92,246,0.15);
+      color: var(--accent-purple);
+      border: 1px solid rgba(139,92,246,0.3);
+    }
+
     /* =========================================================
        Loading / Empty states
     ========================================================= */
@@ -1044,6 +1187,8 @@
       .stats-grid { grid-template-columns: 1fr 1fr; }
       .filter-bar { gap: 8px; }
       .nav-subtitle { display: none; }
+      .instrument-tabs-wrap { gap: 4px; }
+      .instr-tab { padding: 8px 12px; font-size: 12px; }
     }
   </style>
 </head>
@@ -1150,6 +1295,30 @@
     <!-- ===== MAIN CONTENT ===== -->
     <main class="content">
 
+      <!-- ── Instrument type top-level tabs ── -->
+      <div class="instrument-tabs-wrap">
+        <button class="instr-tab active" id="instrAll" onclick="setInstrumentType(null, this)">
+          📊 All Options
+          <span class="instr-tab-count" id="instrAllCount">—</span>
+        </button>
+        <button class="instr-tab" id="instrIndex" onclick="setInstrumentType('index', this)">
+          🏦 Index Options
+          <span class="instr-tab-count" id="instrIndexCount">—</span>
+        </button>
+        <button class="instr-tab stock-tab" id="instrStock" onclick="setInstrumentType('stock', this)">
+          📈 Stock Options
+          <span class="instr-tab-count" id="instrStockCount">—</span>
+        </button>
+      </div>
+
+      <!-- ── Weekly / Monthly sub-tabs (only for Index Options) ── -->
+      <div class="expiry-subtabs-wrap" id="expirySubtabs">
+        <span class="expiry-label">Expiry:</span>
+        <button class="expiry-tab active weekly" id="expiryAll"     onclick="setExpiryType(null,      this)">All</button>
+        <button class="expiry-tab weekly"         id="expiryWeekly" onclick="setExpiryType('weekly',  this)">📅 Weekly</button>
+        <button class="expiry-tab monthly"        id="expiryMonthly"onclick="setExpiryType('monthly', this)">📆 Monthly</button>
+      </div>
+
       <!-- Filter bar -->
       <div class="filter-bar">
         <div class="horizon-tabs">
@@ -1193,7 +1362,9 @@
 
   <!-- ===================== JAVASCRIPT ===================== -->
   <script>
-    let currentHorizon = null;
+    let currentHorizon        = null;
+    let currentInstrumentType = null;
+    let currentExpiryType     = null;
     let searchTimeout  = null;
     let allStats       = null;
 
@@ -1243,6 +1414,11 @@
         document.getElementById('statTomorrow').textContent = data.tomorrow || 0;
         document.getElementById('statMonthly').textContent  = data.monthly || 0;
 
+        // Update instrument tab counts
+        document.getElementById('instrAllCount').textContent   = data.total || 0;
+        document.getElementById('instrIndexCount').textContent = data.index_count || 0;
+        document.getElementById('instrStockCount').textContent = data.stock_count || 0;
+
         const total = (data.bullish || 0) + (data.bearish || 0);
         const pct   = total > 0 ? Math.round((data.bullish / total) * 100) : 50;
         document.getElementById('sentimentFill').style.width = pct + '%';
@@ -1272,9 +1448,11 @@
       const q       = document.getElementById('searchInput').value.trim();
 
       const params = new URLSearchParams();
-      if (horizon) params.set('horizon', horizon);
-      if (sort)    params.set('sort', sort);
-      if (q)       params.set('q', q);
+      if (horizon)         params.set('horizon', horizon);
+      if (sort)            params.set('sort', sort);
+      if (q)               params.set('q', q);
+      if (currentInstrumentType) params.set('instrument_type', currentInstrumentType);
+      if (currentExpiryType)     params.set('expiry_type', currentExpiryType);
 
       document.getElementById('cardsArea').innerHTML =
         '<div class="loading-state"><div class="loading-spinner"></div><div>Loading…</div></div>';
@@ -1375,6 +1553,10 @@
       const slDisp  = rec.stop_loss ? '₹' + fmt(rec.stop_loss) : null;
       const t1Disp  = rec.targets && rec.targets[0] ? '₹' + fmt(rec.targets[0]) : null;
       const t2Disp  = rec.targets && rec.targets[1] ? '₹' + fmt(rec.targets[1]) : null;
+      const isIndex = rec.instrument_type === 'index';
+      const expiryTypeBadge = isIndex && rec.expiry_type
+        ? `<span class="expiry-type-badge ${rec.expiry_type}">${rec.expiry_type === 'weekly' ? '📅 Weekly' : '📆 Monthly'}</span>`
+        : '';
 
       // Avatar: use profile image or colored initials
       const avatarHtml = author.profile_image_url && author.profile_image_url.startsWith('http')
@@ -1394,9 +1576,11 @@
               <div class="symbol-badge ${symClass}">${escHtml(rec.symbol || '?')}</div>
               ${opt ? `<span class="option-pill ${symClass}">${opt === 'CE' ? '📈 CE' : '📉 PE'}</span>` : ''}
               ${rec.strike_price ? `<span class="strike-label">${rec.strike_price} Strike</span>` : ''}
+              <span class="instrument-badge ${rec.instrument_type || 'stock'}">${isIndex ? 'INDEX' : 'STOCK'}</span>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
               <span class="horizon-pill ${rec.horizon}">${horizonLabel}</span>
+              ${expiryTypeBadge}
               ${rec.expiry ? `<span class="expiry-tag">Exp: ${escHtml(rec.expiry)}</span>` : ''}
             </div>
           </div>
@@ -1477,6 +1661,33 @@
     function setHorizon(horizon, btn) {
       currentHorizon = horizon;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadRecommendations();
+    }
+
+    function setInstrumentType(type, btn) {
+      currentInstrumentType = type;
+      // Reset expiry type when switching instrument
+      currentExpiryType = null;
+      document.querySelectorAll('.instr-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Show/hide expiry sub-tabs
+      const subtabs = document.getElementById('expirySubtabs');
+      if (type === 'index') {
+        subtabs.classList.add('visible');
+        // Reset sub-tab active state
+        document.querySelectorAll('.expiry-tab').forEach(b => b.classList.remove('active'));
+        document.getElementById('expiryAll').classList.add('active');
+      } else {
+        subtabs.classList.remove('visible');
+      }
+      loadRecommendations();
+    }
+
+    function setExpiryType(type, btn) {
+      currentExpiryType = type;
+      document.querySelectorAll('.expiry-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       loadRecommendations();
     }
