@@ -308,12 +308,30 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
     results  = []
     seen_ids = set()
 
+    # Check if any account is actually available before burning time on queries
+    try:
+        available = await api.pool.get_all()
+        active = [a for a in available if getattr(a, 'active', False)]
+        if not active:
+            logger.warning("[twscrape] No active accounts in pool — skipping search.")
+            return []
+    except Exception as exc:
+        logger.warning("[twscrape] Could not check account pool: %s", exc)
+        return []
+
     for query in queries:
         if len(results) >= max_results:
             break
         logger.info("[twscrape] Searching: %s", query)
         try:
-            tweets = await gather(api.search(query, limit=30))
+            # Hard timeout per query — prevents blocking on rate-limited waits
+            tweets = await asyncio.wait_for(
+                gather(api.search(query, limit=30)),
+                timeout=60,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[twscrape] Query timed out (60s), skipping: %s", query)
+            continue
         except Exception as exc:
             logger.warning("[twscrape] Search failed [%s]: %s", query, exc)
             continue
@@ -362,7 +380,7 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
 
 
 def fetch_via_twscrape(max_results: int = 60) -> list[dict]:
-    """Sync wrapper around the async twscrape fetch."""
+    """Sync wrapper around the async twscrape fetch with a hard 3-minute timeout."""
     try:
         try:
             loop = asyncio.get_event_loop()
@@ -372,7 +390,11 @@ def fetch_via_twscrape(max_results: int = 60) -> list[dict]:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        return loop.run_until_complete(_twscrape_async(TWSCRAPE_QUERIES, max_results))
+        coro = _twscrape_async(TWSCRAPE_QUERIES, max_results)
+        return loop.run_until_complete(asyncio.wait_for(coro, timeout=180))
+    except asyncio.TimeoutError:
+        logger.warning("[twscrape] Overall fetch timed out after 3 minutes — returning empty.")
+        return []
     except Exception as exc:
         logger.warning("[twscrape] Unexpected error: %s", exc)
         return []
