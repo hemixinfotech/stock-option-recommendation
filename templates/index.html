@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NSE/BSE Stock Option Recommendations — Live Twitter Signals</title>
+  <meta name="description" content="Real-time stock option recommendations for NSE and BSE from top Twitter analysts. Track NIFTY, BANKNIFTY calls with buy price, target and stop loss." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* =========================================================
+       Design Tokens
+    ========================================================= */
+    :root {
+      --bg-base:        #050c1a;
+      --bg-surface:     #0a1628;
+      --bg-card:        rgba(13, 25, 48, 0.85);
+      --bg-card-hover:  rgba(17, 33, 62, 0.95);
+      --border:         rgba(56, 100, 180, 0.22);
+      --border-glow:    rgba(56, 140, 255, 0.35);
+
+      --accent-blue:    #3b82f6;
+      --accent-cyan:    #06b6d4;
+      --accent-green:   #10b981;
+      --accent-red:     #ef4444;
+      --accent-orange:  #f59e0b;
+      --accent-purple:  #8b5cf6;
+
+      --text-primary:   #f0f4ff;
+      --text-secondary: #8ba0c4;
+      --text-muted:     #4a6080;
+
+      --bullish:        #10b981;
+      --bullish-dim:    rgba(16, 185, 129, 0.12);
+      --bearish:        #ef4444;
+      --bearish-dim:    rgba(239, 68, 68, 0.12);
+
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-sans: 'Inter', sans-serif;
+
+      --radius-sm:  8px;
+      --radius-md:  14px;
+      --radius-lg:  20px;
+      --radius-xl:  28px;
+
+      --shadow-card: 0 4px 32px rgba(0,0,30,0.6), 0 1px 0 rgba(255,255,255,0.04) inset;
+      --shadow-glow: 0 0 30px rgba(59,130,246,0.18);
+    }
+
+    /* =========================================================
+       Reset & Base
+    ========================================================= */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Animated background mesh */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(59,130,246,0.07) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(139,92,246,0.06) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 30% at 50% 50%, rgba(6,182,212,0.04) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body > * { position: relative; z-index: 1; }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* =========================================================
+       Scrollbar
+    ========================================================= */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-surface); }
+    ::-webkit-scrollbar-thumb { background: rgba(59,130,246,0.4); border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent-blue); }
+
+    /* =========================================================
+       Header / Navbar
+    ========================================================= */
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      height: 64px;
+      background: rgba(5, 12, 26, 0.9);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .nav-logo {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 20px rgba(59,130,246,0.4);
+    }
+
+    .nav-title {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      background: linear-gradient(135deg, #fff 40%, var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .nav-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .mock-badge {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: rgba(245,158,11,0.15);
+      border: 1px solid rgba(245,158,11,0.35);
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-orange);
+    }
+
+    .mock-badge.visible { display: flex; }
+
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: rgba(16,185,129,0.12);
+      border: 1px solid rgba(16,185,129,0.3);
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-green);
+    }
+
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    .btn-refresh {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-blue);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-refresh:hover {
+      background: rgba(59,130,246,0.22);
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 16px rgba(59,130,246,0.2);
+    }
+
+    .btn-refresh.spinning svg { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .last-updated {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* =========================================================
+       Main Layout
+    ========================================================= */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 64px);
+    }
+
+    /* =========================================================
+       Sidebar
+    ========================================================= */
+    .sidebar {
+      background: rgba(8, 16, 32, 0.6);
+      border-right: 1px solid var(--border);
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      overflow-y: auto;
+      height: calc(100vh - 64px);
+      position: sticky;
+      top: 64px;
+    }
+
+    /* Stats overview */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      text-align: center;
+      transition: all 0.25s;
+    }
+
+    .stat-card:hover {
+      border-color: var(--border-glow);
+      box-shadow: var(--shadow-glow);
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .stat-card.today  .stat-value { color: var(--accent-blue); }
+    .stat-card.tmrow  .stat-value { color: var(--accent-purple); }
+    .stat-card.monthly .stat-value { color: var(--accent-cyan); }
+    .stat-card.total   .stat-value { color: var(--text-primary); }
+
+    /* Sentiment bar */
+    .sentiment-section { }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+    }
+
+    .sentiment-bar-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+    }
+
+    .sentiment-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .sentiment-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .sentiment-label.bull { color: var(--bullish); }
+    .sentiment-label.bear { color: var(--bearish); }
+
+    .sentiment-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+    .sentiment-dot.bull { background: var(--bullish); }
+    .sentiment-dot.bear { background: var(--bearish); }
+
+    .sentiment-track {
+      height: 10px;
+      border-radius: 99px;
+      background: var(--bearish-dim);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .sentiment-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--bullish), #34d399);
+      transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .sentiment-pct {
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+
+    /* Top Analysts */
+    .analysts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .analyst-mini-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      cursor: pointer;
+      transition: all 0.25s;
+    }
+
+    .analyst-mini-card:hover {
+      border-color: var(--border-glow);
+      background: var(--bg-card-hover);
+      transform: translateX(3px);
+    }
+
+    .analyst-avatar-mini {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .analyst-avatar-img {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+
+    .verified-check {
+      position: absolute;
+      bottom: -2px;
+      right: -2px;
+      width: 14px;
+      height: 14px;
+      background: var(--accent-blue);
+      border-radius: 50%;
+      border: 2px solid var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .verified-check svg { width: 7px; height: 7px; }
+
+    .analyst-mini-info { flex: 1; min-width: 0; }
+
+    .analyst-mini-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .analyst-mini-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+    }
+
+    .analyst-mini-rank {
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--accent-orange);
+      background: rgba(245,158,11,0.12);
+      border: 1px solid rgba(245,158,11,0.25);
+      border-radius: 99px;
+      padding: 1px 7px;
+    }
+
+    /* =========================================================
+       Main Content
+    ========================================================= */
+    .content {
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* Filter bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .horizon-tabs {
+      display: flex;
+      background: rgba(8, 16, 32, 0.7);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 4px;
+      gap: 2px;
+    }
+
+    .tab-btn {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .tab-btn.active {
+      background: var(--accent-blue);
+      color: #fff;
+      box-shadow: 0 0 20px rgba(59,130,246,0.35);
+    }
+
+    .tab-btn:not(.active):hover {
+      background: rgba(255,255,255,0.06);
+      color: var(--text-primary);
+    }
+
+    .search-wrap {
+      flex: 1;
+      max-width: 280px;
+      position: relative;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 9px 12px 9px 36px;
+      background: rgba(8, 16, 32, 0.7);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: var(--font-sans);
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .search-input::placeholder { color: var(--text-muted); }
+
+    .search-input:focus {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+
+    .sort-select {
+      padding: 9px 14px;
+      background: rgba(8, 16, 32, 0.7);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-family: var(--font-sans);
+      outline: none;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .sort-select:focus {
+      border-color: var(--accent-blue);
+      color: var(--text-primary);
+    }
+
+    .result-count {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+
+    /* =========================================================
+       Recommendation Cards Grid
+    ========================================================= */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 20px;
+    }
+
+    .rec-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: var(--shadow-card);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      animation: fadeInUp 0.4s ease both;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .rec-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--card-accent-color, var(--accent-blue));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .rec-card:hover {
+      border-color: var(--border-glow);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-card), var(--shadow-glow);
+    }
+
+    .rec-card:hover::before { opacity: 1; }
+
+    .rec-card.bullish { --card-accent-color: var(--bullish); }
+    .rec-card.bearish { --card-accent-color: var(--bearish); }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Card header */
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .card-symbol-section {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .symbol-badge {
+      font-size: 16px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      letter-spacing: 0.5px;
+    }
+
+    .symbol-badge.ce {
+      background: rgba(16,185,129,0.15);
+      border: 1.5px solid rgba(16,185,129,0.4);
+      color: var(--accent-green);
+    }
+
+    .symbol-badge.pe {
+      background: rgba(239,68,68,0.15);
+      border: 1.5px solid rgba(239,68,68,0.4);
+      color: var(--accent-red);
+    }
+
+    .symbol-badge.unknown {
+      background: rgba(139,92,246,0.15);
+      border: 1.5px solid rgba(139,92,246,0.4);
+      color: var(--accent-purple);
+    }
+
+    .option-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 99px;
+      letter-spacing: 0.5px;
+    }
+
+    .option-pill.ce {
+      background: rgba(16,185,129,0.12);
+      color: var(--accent-green);
+      border: 1px solid rgba(16,185,129,0.25);
+    }
+
+    .option-pill.pe {
+      background: rgba(239,68,68,0.12);
+      color: var(--accent-red);
+      border: 1px solid rgba(239,68,68,0.25);
+    }
+
+    .strike-label {
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+    }
+
+    .horizon-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 99px;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+    }
+
+    .horizon-pill.today {
+      background: rgba(59,130,246,0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(59,130,246,0.3);
+    }
+
+    .horizon-pill.tomorrow {
+      background: rgba(139,92,246,0.15);
+      color: var(--accent-purple);
+      border: 1px solid rgba(139,92,246,0.3);
+    }
+
+    .horizon-pill.monthly {
+      background: rgba(6,182,212,0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6,182,212,0.3);
+    }
+
+    /* Price section */
+    .price-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .price-box {
+      background: rgba(5, 12, 26, 0.6);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 10px;
+      text-align: center;
+    }
+
+    .price-box-label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .price-box-value {
+      font-size: 20px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      line-height: 1;
+    }
+
+    .price-box.buy   { border-color: rgba(59,130,246,0.3); }
+    .price-box.buy .price-box-value   { color: var(--accent-blue); }
+    .price-box.sl    { border-color: rgba(239,68,68,0.3); }
+    .price-box.sl .price-box-value    { color: var(--accent-red); }
+    .price-box.target { border-color: rgba(16,185,129,0.3); }
+    .price-box.target .price-box-value { color: var(--accent-green); }
+
+    .price-na {
+      font-size: 14px;
+      font-weight: 500;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    /* Target row (multiple targets) */
+    .targets-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .targets-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      flex-shrink: 0;
+    }
+
+    .target-chip {
+      padding: 4px 10px;
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.25);
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--accent-green);
+    }
+
+    .target-chip.t2 {
+      background: rgba(6,182,212,0.1);
+      border-color: rgba(6,182,212,0.25);
+      color: var(--accent-cyan);
+    }
+
+    /* Tweet text */
+    .tweet-text {
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+      border-left: 2px solid rgba(59,130,246,0.3);
+      padding-left: 12px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* Author section */
+    .author-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .author-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+      flex-shrink: 0;
+      position: relative;
+      border: 2px solid var(--border);
+    }
+
+    .author-avatar img {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+
+    .verified-icon {
+      position: absolute;
+      bottom: -2px;
+      right: -2px;
+      width: 16px;
+      height: 16px;
+      background: var(--accent-blue);
+      border-radius: 50%;
+      border: 2px solid var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .verified-icon svg { width: 8px; height: 8px; }
+
+    .author-info { flex: 1; min-width: 0; }
+
+    .author-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .author-handle {
+      font-size: 12px;
+      color: var(--accent-blue);
+      font-weight: 500;
+    }
+
+    .author-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .meta-item strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+
+    .follower-highlight {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-orange);
+      background: rgba(245,158,11,0.1);
+      border: 1px solid rgba(245,158,11,0.2);
+      border-radius: 99px;
+      padding: 2px 8px;
+    }
+
+    /* Card footer: engagement + tweet link */
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .engagement-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .eng-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .eng-item.likes   { color: #f472b6; }
+    .eng-item.rts     { color: var(--accent-green); }
+    .eng-item.replies { color: var(--accent-blue); }
+
+    .tweet-link {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-blue);
+      padding: 5px 10px;
+      border: 1px solid rgba(59,130,246,0.25);
+      border-radius: 99px;
+      transition: all 0.2s;
+    }
+
+    .tweet-link:hover {
+      background: rgba(59,130,246,0.12);
+      border-color: var(--accent-blue);
+    }
+
+    .expiry-tag {
+      font-size: 10px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--accent-orange);
+      background: rgba(245,158,11,0.1);
+      border: 1px solid rgba(245,158,11,0.2);
+      border-radius: 99px;
+      padding: 2px 8px;
+    }
+
+    /* =========================================================
+       Loading / Empty states
+    ========================================================= */
+    .loading-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 80px 40px;
+      color: var(--text-muted);
+    }
+
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 80px 40px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .empty-icon { font-size: 48px; opacity: 0.3; }
+
+    .empty-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .error-toast {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius-md);
+      padding: 16px 20px;
+      color: var(--accent-red);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    /* =========================================================
+       Disclaimer Banner
+    ========================================================= */
+    .disclaimer {
+      background: rgba(245,158,11,0.06);
+      border: 1px solid rgba(245,158,11,0.2);
+      border-radius: var(--radius-md);
+      padding: 12px 18px;
+      font-size: 11.5px;
+      color: rgba(245,158,11,0.8);
+      line-height: 1.5;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .disclaimer-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+    /* =========================================================
+       Responsive
+    ========================================================= */
+    @media (max-width: 1024px) {
+      .main-layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        height: auto;
+        position: static;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .stats-grid { grid-template-columns: repeat(4, 1fr); }
+      .analysts-list { flex-direction: row; overflow-x: auto; }
+      .analyst-mini-card { flex-shrink: 0; width: 200px; }
+    }
+
+    @media (max-width: 640px) {
+      .navbar { padding: 0 16px; }
+      .content { padding: 16px; }
+      .cards-grid { grid-template-columns: 1fr; }
+      .price-grid { grid-template-columns: 1fr 1fr 1fr; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .filter-bar { gap: 8px; }
+      .nav-subtitle { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===================== NAVBAR ===================== -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">📈</div>
+      <div>
+        <div class="nav-title">OptionSignals India</div>
+        <div class="nav-subtitle">NSE · BSE · Twitter-sourced recommendations</div>
+      </div>
+    </div>
+    <div class="nav-right">
+      <div class="mock-badge" id="mockBadge">
+        <span>⚠</span> Demo Data
+      </div>
+      <div class="live-badge" id="liveBadge" style="display:none">
+        <div class="pulse-dot"></div>
+        Live
+      </div>
+      <div class="last-updated" id="lastUpdated">Fetching…</div>
+      <button class="btn-refresh" id="refreshBtn" onclick="refreshData()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M1 4v6h6M23 20v-6h-6"/>
+          <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+        </svg>
+        Refresh
+      </button>
+    </div>
+  </nav>
+
+  <!-- ===================== LAYOUT ===================== -->
+  <div class="main-layout">
+
+    <!-- ===== SIDEBAR ===== -->
+    <aside class="sidebar">
+
+      <!-- Stats -->
+      <div>
+        <div class="section-title">📊 Today's Overview</div>
+        <div class="stats-grid">
+          <div class="stat-card total">
+            <div class="stat-value" id="statTotal">—</div>
+            <div class="stat-label">Total</div>
+          </div>
+          <div class="stat-card today">
+            <div class="stat-value" id="statToday">—</div>
+            <div class="stat-label">Today</div>
+          </div>
+          <div class="stat-card tmrow">
+            <div class="stat-value" id="statTomorrow">—</div>
+            <div class="stat-label">Tomorrow</div>
+          </div>
+          <div class="stat-card monthly">
+            <div class="stat-value" id="statMonthly">—</div>
+            <div class="stat-label">Monthly</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sentiment -->
+      <div class="sentiment-section">
+        <div class="section-title">🌡 Market Sentiment</div>
+        <div class="sentiment-bar-wrap">
+          <div class="sentiment-labels">
+            <span class="sentiment-label bull">
+              <span class="sentiment-dot bull"></span>
+              Bullish <span id="bullCount">—</span>
+            </span>
+            <span class="sentiment-label bear">
+              Bearish <span id="bearCount">—</span>
+              <span class="sentiment-dot bear"></span>
+            </span>
+          </div>
+          <div class="sentiment-track">
+            <div class="sentiment-fill" id="sentimentFill" style="width:50%"></div>
+          </div>
+          <div class="sentiment-pct" id="sentimentPct">Calculating…</div>
+        </div>
+      </div>
+
+      <!-- Top Analysts -->
+      <div>
+        <div class="section-title">🏆 Top Analysts by Followers</div>
+        <div class="analysts-list" id="topAnalysts">
+          <!-- filled by JS -->
+        </div>
+      </div>
+
+      <!-- Disclaimer -->
+      <div class="disclaimer">
+        <span class="disclaimer-icon">⚠️</span>
+        <div>
+          <strong>Disclaimer:</strong> These are social media signals only.
+          Not SEBI registered investment advice. Always do your own research.
+          Trading options carries significant risk of loss.
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <main class="content">
+
+      <!-- Filter bar -->
+      <div class="filter-bar">
+        <div class="horizon-tabs">
+          <button class="tab-btn active" id="tabAll"      onclick="setHorizon(null,    this)">All</button>
+          <button class="tab-btn"        id="tabToday"    onclick="setHorizon('today', this)">📅 Today</button>
+          <button class="tab-btn"        id="tabTomorrow" onclick="setHorizon('tomorrow', this)">⏭ Tomorrow</button>
+          <button class="tab-btn"        id="tabMonthly"  onclick="setHorizon('monthly', this)">📆 Monthly</button>
+        </div>
+
+        <div class="search-wrap">
+          <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            type="text"
+            id="searchInput"
+            class="search-input"
+            placeholder="Search symbol, analyst…"
+            oninput="debounceSearch()"
+          />
+        </div>
+
+        <select class="sort-select" id="sortSelect" onchange="loadRecommendations()">
+          <option value="followers">Sort: Followers</option>
+          <option value="engagement">Sort: Engagement</option>
+        </select>
+
+        <span class="result-count" id="resultCount"></span>
+      </div>
+
+      <!-- Cards area -->
+      <div id="cardsArea">
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <div>Loading recommendations…</div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ===================== JAVASCRIPT ===================== -->
+  <script>
+    let currentHorizon = null;
+    let searchTimeout  = null;
+    let allStats       = null;
+
+    // ── Utilities ──────────────────────────────────────────
+
+    function fmt(n) {
+      if (n === null || n === undefined) return null;
+      return parseFloat(n).toFixed(2);
+    }
+
+    function fmtFollowers(n) {
+      if (!n) return '0';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+      return n.toString();
+    }
+
+    function initials(name) {
+      if (!name) return '?';
+      return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+    }
+
+    function timeAgo(isoStr) {
+      if (!isoStr) return '';
+      const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+      if (diff < 60)    return 'just now';
+      if (diff < 3600)  return Math.floor(diff / 60)   + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600)  + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+
+    function escHtml(s) {
+      if (!s) return '';
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Data Loading ────────────────────────────────────────
+
+    async function loadStats() {
+      try {
+        const res  = await fetch('/api/stats');
+        const data = await res.json();
+        allStats = data;
+
+        document.getElementById('statTotal').textContent    = data.total || 0;
+        document.getElementById('statToday').textContent    = data.today || 0;
+        document.getElementById('statTomorrow').textContent = data.tomorrow || 0;
+        document.getElementById('statMonthly').textContent  = data.monthly || 0;
+
+        const total = (data.bullish || 0) + (data.bearish || 0);
+        const pct   = total > 0 ? Math.round((data.bullish / total) * 100) : 50;
+        document.getElementById('sentimentFill').style.width = pct + '%';
+        document.getElementById('bullCount').textContent = data.bullish || 0;
+        document.getElementById('bearCount').textContent = data.bearish || 0;
+        document.getElementById('sentimentPct').textContent =
+          `${pct}% Bullish  ·  ${100-pct}% Bearish`;
+
+        // Top analysts
+        renderTopAnalysts(data.top_authors || []);
+
+        // Mock/Live indicator
+        updateMockBadge(data.is_mock);
+
+        if (data.last_updated) {
+          document.getElementById('lastUpdated').textContent =
+            'Updated ' + timeAgo(data.last_updated);
+        }
+      } catch(e) {
+        console.error('Stats error:', e);
+      }
+    }
+
+    async function loadRecommendations() {
+      const horizon = currentHorizon;
+      const sort    = document.getElementById('sortSelect').value;
+      const q       = document.getElementById('searchInput').value.trim();
+
+      const params = new URLSearchParams();
+      if (horizon) params.set('horizon', horizon);
+      if (sort)    params.set('sort', sort);
+      if (q)       params.set('q', q);
+
+      document.getElementById('cardsArea').innerHTML =
+        '<div class="loading-state"><div class="loading-spinner"></div><div>Loading…</div></div>';
+
+      try {
+        const res  = await fetch('/api/recommendations?' + params.toString());
+        const data = await res.json();
+
+        updateMockBadge(data.is_mock);
+
+        if (data.last_updated) {
+          document.getElementById('lastUpdated').textContent =
+            'Updated ' + timeAgo(data.last_updated);
+        }
+
+        document.getElementById('resultCount').textContent =
+          `${data.count} result${data.count !== 1 ? 's' : ''}`;
+
+        renderCards(data.recommendations || []);
+      } catch(e) {
+        document.getElementById('cardsArea').innerHTML =
+          `<div class="error-toast">⚠ Failed to load recommendations. Make sure the Flask server is running.<br><small>${e.message}</small></div>`;
+      }
+    }
+
+    async function refreshData() {
+      const btn = document.getElementById('refreshBtn');
+      btn.classList.add('spinning');
+      try {
+        await fetch('/api/refresh');
+        await Promise.all([loadStats(), loadRecommendations()]);
+      } finally {
+        btn.classList.remove('spinning');
+      }
+    }
+
+    // ── Rendering ───────────────────────────────────────────
+
+    function updateMockBadge(isMock) {
+      document.getElementById('mockBadge').classList.toggle('visible', !!isMock);
+      document.getElementById('liveBadge').style.display = isMock ? 'none' : 'flex';
+    }
+
+    function renderTopAnalysts(authors) {
+      const container = document.getElementById('topAnalysts');
+      if (!authors.length) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:12px">No data yet</div>';
+        return;
+      }
+      container.innerHTML = authors.map((a, i) => `
+        <div class="analyst-mini-card" onclick="filterByAuthor('${escHtml(a.name)}')">
+          <div class="analyst-avatar-mini">
+            ${initials(a.name)}
+          </div>
+          <div class="analyst-mini-info">
+            <div class="analyst-mini-name">${escHtml(a.name)}</div>
+            <div class="analyst-mini-meta">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              <strong>${fmtFollowers(a.followers)}</strong> followers
+            </div>
+          </div>
+          <div class="analyst-mini-rank">#${i+1}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderCards(recs) {
+      const container = document.getElementById('cardsArea');
+
+      if (!recs.length) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">No recommendations found</div>
+            <div>Try a different filter or search term</div>
+          </div>`;
+        return;
+      }
+
+      const html = `<div class="cards-grid">${recs.map(renderCard).join('')}</div>`;
+      container.innerHTML = html;
+    }
+
+    function renderCard(rec) {
+      const opt  = (rec.option_type || '').toUpperCase();
+      const symClass = opt === 'CE' ? 'ce' : opt === 'PE' ? 'pe' : 'unknown';
+      const cardClass = rec.sentiment === 'BULLISH' ? 'bullish' : rec.sentiment === 'BEARISH' ? 'bearish' : '';
+
+      const horizonLabel = { today: 'Today', tomorrow: 'Tomorrow', monthly: 'Monthly' }[rec.horizon] || 'Unspecified';
+      const author = rec.author || {};
+
+      const buyDisp = rec.buy_price ? '₹' + fmt(rec.buy_price) : null;
+      const slDisp  = rec.stop_loss ? '₹' + fmt(rec.stop_loss) : null;
+      const t1Disp  = rec.targets && rec.targets[0] ? '₹' + fmt(rec.targets[0]) : null;
+      const t2Disp  = rec.targets && rec.targets[1] ? '₹' + fmt(rec.targets[1]) : null;
+
+      // Avatar: use profile image or colored initials
+      const avatarHtml = author.profile_image_url && author.profile_image_url.startsWith('http')
+        ? `<img src="${escHtml(author.profile_image_url)}" alt="${escHtml(author.name)}" onerror="this.style.display='none'">`
+        : escHtml(initials(author.name || 'U'));
+
+      const verifiedHtml = author.verified ? `
+        <span class="verified-icon" title="Verified">
+          <svg viewBox="0 0 24 24" fill="white"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        </span>` : '';
+
+      return `
+        <div class="rec-card ${cardClass}">
+          <!-- Header -->
+          <div class="card-header">
+            <div class="card-symbol-section">
+              <div class="symbol-badge ${symClass}">${escHtml(rec.symbol || '?')}</div>
+              ${opt ? `<span class="option-pill ${symClass}">${opt === 'CE' ? '📈 CE' : '📉 PE'}</span>` : ''}
+              ${rec.strike_price ? `<span class="strike-label">${rec.strike_price} Strike</span>` : ''}
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+              <span class="horizon-pill ${rec.horizon}">${horizonLabel}</span>
+              ${rec.expiry ? `<span class="expiry-tag">Exp: ${escHtml(rec.expiry)}</span>` : ''}
+            </div>
+          </div>
+
+          <!-- Price boxes -->
+          <div class="price-grid">
+            <div class="price-box buy">
+              <div class="price-box-label">Buy Price</div>
+              <div class="price-box-value">${buyDisp || '<span class="price-na">—</span>'}</div>
+            </div>
+            <div class="price-box target">
+              <div class="price-box-label">Target</div>
+              <div class="price-box-value">${t1Disp || '<span class="price-na">—</span>'}</div>
+            </div>
+            <div class="price-box sl">
+              <div class="price-box-label">Stop Loss</div>
+              <div class="price-box-value">${slDisp || '<span class="price-na">—</span>'}</div>
+            </div>
+          </div>
+
+          <!-- Multiple targets -->
+          ${t2Disp ? `
+          <div class="targets-row">
+            <span class="targets-label">Targets:</span>
+            ${t1Disp ? `<span class="target-chip">T1 ${t1Disp}</span>` : ''}
+            <span class="target-chip t2">T2 ${t2Disp}</span>
+          </div>` : ''}
+
+          <!-- Tweet text -->
+          <div class="tweet-text">${escHtml(rec.text)}</div>
+
+          <!-- Author -->
+          <div class="author-section">
+            <div class="author-avatar">
+              ${avatarHtml}
+              ${verifiedHtml}
+            </div>
+            <div class="author-info">
+              <div class="author-name">
+                ${escHtml(author.name || 'Unknown')}
+                <span class="author-handle">${escHtml(author.handle || '')}</span>
+              </div>
+              <div class="author-meta">
+                <span class="follower-highlight">
+                  👥 ${fmtFollowers(author.followers)} followers
+                </span>
+                <span class="meta-item">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <strong>${fmtFollowers(author.tweet_count)}</strong> tweets
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="card-footer">
+            <div class="engagement-row">
+              <span class="eng-item likes">❤️ ${rec.likes || 0}</span>
+              <span class="eng-item rts">🔁 ${rec.retweets || 0}</span>
+              <span class="eng-item replies">💬 ${rec.replies || 0}</span>
+              <span style="font-size:10px;color:var(--text-muted);margin-left:4px">${timeAgo(rec.created_at)}</span>
+            </div>
+            <a href="${escHtml(rec.tweet_url)}" target="_blank" rel="noopener" class="tweet-link">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+              View Tweet
+            </a>
+          </div>
+        </div>
+      `;
+    }
+
+    // ── Controls ────────────────────────────────────────────
+
+    function setHorizon(horizon, btn) {
+      currentHorizon = horizon;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadRecommendations();
+    }
+
+    function debounceSearch() {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(loadRecommendations, 350);
+    }
+
+    function filterByAuthor(name) {
+      document.getElementById('searchInput').value = name;
+      loadRecommendations();
+    }
+
+    // ── Init ────────────────────────────────────────────────
+
+    (async () => {
+      await Promise.all([loadStats(), loadRecommendations()]);
+      // Auto-refresh every 5 minutes
+      setInterval(async () => {
+        await Promise.all([loadStats(), loadRecommendations()]);
+      }, 300_000);
+    })();
+  </script>
+</body>
+</html>
