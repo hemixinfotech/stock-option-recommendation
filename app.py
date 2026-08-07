@@ -44,7 +44,7 @@ _CACHE: dict = {
     "last_updated": None,
     "is_mock": True,
 }
-_CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
+_CACHE_TTL_SECONDS = 900  # refresh every 15 minutes (avoids Twitter rate limits)
 _cache_lock = threading.Lock()
 
 # Seed cache immediately with mock data — API routes always respond instantly

@@ -192,26 +192,11 @@ def _is_option_post(text: str, strict: bool = True) -> bool:
 # ---------------------------------------------------------------------------
 
 TWSCRAPE_QUERIES = [
-    "BANKNIFTY CE OR PE target SL -filter:retweets",
-    "NIFTY CE OR PE target SL intraday -filter:retweets",
-    "NSE options CE PE buy target stoploss -filter:retweets",
-    "#BankNifty CE PE buy target -filter:retweets",
-    "#NIFTY50 CE PE target SL -filter:retweets",
-    "RELIANCE OR HDFCBANK CE PE target SL -filter:retweets",
-    "FINNIFTY CE OR PE target SL weekly -filter:retweets",
-    "MIDCPNIFTY CE OR PE target SL -filter:retweets",
-    "TCS OR INFY OR WIPRO CE PE option buy target -filter:retweets",
-    "SBIN OR ICICIBANK OR AXISBANK CE PE buy target SL -filter:retweets",
-    "TATAMOTORS OR MARUTI CE PE option target -filter:retweets",
-    "BAJFINANCE OR BAJAJFINSV CE PE target SL -filter:retweets",
-    "#NSEoptions intraday CE PE buy target SL -filter:retweets",
-    "#FnO #NSE CE PE target stoploss -filter:retweets",
-    "ADANIENT OR ADANIPORTS CE PE target SL -filter:retweets",
-    "SUNPHARMA OR DRREDDY OR CIPLA CE PE target -filter:retweets",
-    "HCLTECH OR TECHM CE PE option target SL -filter:retweets",
-    "DLF OR GODREJPROP CE PE option target -filter:retweets",
-    "ZOMATO OR IRCTC CE PE buy target SL -filter:retweets",
-    "SBILIFE OR HDFCLIFE OR ICICIPRULI CE PE target -filter:retweets",
+    "BANKNIFTY OR NIFTY CE OR PE target SL -filter:retweets lang:en",
+    "NSE options CE PE buy target stoploss -filter:retweets lang:en",
+    "RELIANCE OR HDFCBANK OR TCS CE PE target SL -filter:retweets lang:en",
+    "SBIN OR ICICIBANK OR TATAMOTORS CE PE target SL -filter:retweets lang:en",
+    "FINNIFTY OR MIDCPNIFTY CE PE target SL -filter:retweets lang:en",
 ]
 
 # Persistent account DB path (Railway volume or /tmp)
@@ -308,13 +293,18 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
     results  = []
     seen_ids = set()
 
-    # Check if any account is actually available before burning time on queries
+    # Verify at least one account exists in the pool
     try:
         available = await api.pool.get_all()
-        active = [a for a in available if getattr(a, 'active', False)]
-        if not active:
-            logger.warning("[twscrape] No active accounts in pool — skipping search.")
+        if not available:
+            logger.warning("[twscrape] No accounts in pool — skipping search.")
             return []
+        # Log lock status so we can see if rate-limited
+        for acct in available:
+            locks = getattr(acct, 'locks', {}) or {}
+            lock_until = locks.get("SearchTimeline")
+            logger.info("[twscrape] Account %s — SearchTimeline lock until: %s",
+                        getattr(acct, 'username', '?'), lock_until or "none")
     except Exception as exc:
         logger.warning("[twscrape] Could not check account pool: %s", exc)
         return []
@@ -324,14 +314,14 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
             break
         logger.info("[twscrape] Searching: %s", query)
         try:
-            # Hard timeout per query — prevents blocking on rate-limited waits
+            # Hard 90s timeout per query — prevents indefinite waits on rate limits
             tweets = await asyncio.wait_for(
-                gather(api.search(query, limit=30)),
-                timeout=60,
+                gather(api.search(query, limit=50)),
+                timeout=90,
             )
         except asyncio.TimeoutError:
-            logger.warning("[twscrape] Query timed out (60s), skipping: %s", query)
-            continue
+            logger.warning("[twscrape] Query timed out (90s), skipping: %s", query)
+            break  # If one query timed out, account is rate-limited — stop trying
         except Exception as exc:
             logger.warning("[twscrape] Search failed [%s]: %s", query, exc)
             continue
@@ -373,7 +363,7 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
                 "source": "twitter",
             })
 
-        await asyncio.sleep(random.uniform(1.0, 2.0))
+        await asyncio.sleep(random.uniform(3.0, 6.0))
 
     logger.info("[twscrape] Total parsed: %d", len(results))
     return results
@@ -391,7 +381,7 @@ def fetch_via_twscrape(max_results: int = 60) -> list[dict]:
             asyncio.set_event_loop(loop)
 
         coro = _twscrape_async(TWSCRAPE_QUERIES, max_results)
-        return loop.run_until_complete(asyncio.wait_for(coro, timeout=180))
+        return loop.run_until_complete(asyncio.wait_for(coro, timeout=300))
     except asyncio.TimeoutError:
         logger.warning("[twscrape] Overall fetch timed out after 3 minutes — returning empty.")
         return []
