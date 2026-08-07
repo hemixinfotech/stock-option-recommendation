@@ -25,7 +25,6 @@ import random
 from datetime import datetime, timezone
 from typing import Optional
 
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -93,11 +92,6 @@ EXPIRY_PATTERN    = re.compile(
     re.IGNORECASE,
 )
 RT_PATTERN = re.compile(r"^RT\s+@", re.IGNORECASE)
-
-_BASE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-}
 
 # ---------------------------------------------------------------------------
 # Core parser
