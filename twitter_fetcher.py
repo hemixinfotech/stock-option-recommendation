@@ -118,11 +118,26 @@ def determine_sentiment(option_type: Optional[str], hint: str = "") -> str:
     return "BULLISH" if option_type.upper() == "CE" else "BEARISH"
 
 
-def _is_option_post(text: str) -> bool:
-    """True if the post looks like an option trade recommendation."""
-    return bool(OPTION_TYPE_PATTERN.search(text)) and (
-        bool(SYMBOL_PATTERN.search(text)) or bool(STRIKE_PATTERN.search(text))
-    )
+# Extended option keywords for StockTwits/Reddit which use different terminology
+_OPTION_KEYWORDS = re.compile(
+    r"\b(CE|PE|call\s*option|put\s*option|call|put|options?\s*trade|F&O|FnO|intraday|swing|positional)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_option_post(text: str, strict: bool = True) -> bool:
+    """
+    True if the post looks like an option trade recommendation.
+    strict=True  → requires CE/PE + symbol (for Twitter where signal:noise is low)
+    strict=False → accepts any option-related post with a symbol (for StockTwits/Reddit)
+    """
+    has_symbol = bool(SYMBOL_PATTERN.search(text)) or bool(STRIKE_PATTERN.search(text))
+    if strict:
+        return bool(OPTION_TYPE_PATTERN.search(text)) and has_symbol
+    # Relaxed: any option keyword + a known symbol, OR has buy/target/SL
+    has_option_kw = bool(_OPTION_KEYWORDS.search(text))
+    has_price_kw  = bool(TARGET_PATTERN.search(text)) or bool(SL_PATTERN.search(text))
+    return has_symbol and (has_option_kw or has_price_kw)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +158,19 @@ _TWSCRAPE_DB = os.getenv("TWSCRAPE_DB_PATH", "/tmp/twscrape_accounts.db")
 
 
 async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
-    """Async core for twscrape. Run inside asyncio.run()."""
+    """
+    Async core for twscrape.
+
+    Authentication priority:
+      1. Cookies: TWITTER_AUTH_TOKEN + TWITTER_CT0  ← bypasses Cloudflare (RECOMMENDED)
+      2. Username + Password fallback
+
+    How to get cookies:
+      1. Open x.com in Chrome, log in
+      2. Press F12 → Application tab → Cookies → https://x.com
+      3. Copy value of 'auth_token' and 'ct0'
+      4. Set as TWITTER_AUTH_TOKEN and TWITTER_CT0 in Railway Variables
+    """
     try:
         from twscrape import API, gather
     except ImportError:
@@ -154,32 +181,65 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
     password       = os.getenv("TWITTER_PASSWORD", "")
     email          = os.getenv("TWITTER_EMAIL", "")
     email_password = os.getenv("TWITTER_EMAIL_PASSWORD", password)
+    auth_token     = os.getenv("TWITTER_AUTH_TOKEN", "")   # cookie value
+    ct0            = os.getenv("TWITTER_CT0", "")           # cookie value
 
-    if not all([username, password, email]):
-        logger.warning(
-            "[twscrape] Missing credentials. Set TWITTER_USERNAME, "
-            "TWITTER_PASSWORD, TWITTER_EMAIL in environment."
-        )
+    if not username:
+        logger.warning("[twscrape] TWITTER_USERNAME not set.")
         return []
 
     api = API(_TWSCRAPE_DB)
 
-    # Add account if not already in pool
     try:
         accounts = await api.pool.get_all()
-        existing = [a.username.lower() for a in accounts]
+        existing = {a.username.lower(): a for a in accounts}
+
         if username.lower() not in existing:
-            logger.info("[twscrape] Adding account: %s", username)
-            await api.pool.add_account(
-                username=username,
-                password=password,
-                email=email,
-                email_password=email_password,
-            )
-            await api.pool.login_all()
-            logger.info("[twscrape] Login successful.")
+            if auth_token and ct0:
+                # ── Cookie-based login (bypasses Cloudflare) ──────────────
+                logger.info("[twscrape] Adding account via cookies: %s", username)
+                cookies_str = f"auth_token={auth_token}; ct0={ct0}"
+                await api.pool.add_account(
+                    username=username,
+                    password=password or "placeholder",
+                    email=email or f"{username}@placeholder.com",
+                    email_password=email_password or "placeholder",
+                    cookies=cookies_str,
+                )
+                logger.info("[twscrape] Cookie-based account added.")
+            elif password and email:
+                # ── Username/Password login (may hit Cloudflare on cloud IPs) ──
+                logger.info("[twscrape] Adding account via password: %s", username)
+                await api.pool.add_account(
+                    username=username,
+                    password=password,
+                    email=email,
+                    email_password=email_password,
+                )
+                await api.pool.login_all()
+                logger.info("[twscrape] Password login attempted.")
+            else:
+                logger.warning(
+                    "[twscrape] Need either (TWITTER_AUTH_TOKEN + TWITTER_CT0) "
+                    "or (TWITTER_PASSWORD + TWITTER_EMAIL)."
+                )
+                return []
         else:
-            logger.info("[twscrape] Account already in pool: %s", username)
+            acct = existing[username.lower()]
+            # If cookies changed, update them
+            if auth_token and ct0 and not getattr(acct, 'active', False):
+                logger.info("[twscrape] Re-adding account with fresh cookies: %s", username)
+                cookies_str = f"auth_token={auth_token}; ct0={ct0}"
+                await api.pool.delete_inactive()
+                await api.pool.add_account(
+                    username=username,
+                    password=password or "placeholder",
+                    email=email or f"{username}@placeholder.com",
+                    email_password=email_password or "placeholder",
+                    cookies=cookies_str,
+                )
+            else:
+                logger.info("[twscrape] Account already active: %s", username)
     except Exception as exc:
         logger.warning("[twscrape] Account setup failed: %s", exc)
         return []
@@ -278,7 +338,7 @@ def fetch_via_stocktwits(max_results: int = 60) -> list[dict]:
             return None
         seen_ids.add(mid)
         body = msg.get("body", "")
-        if not body or not _is_option_post(body):
+        if not body or not _is_option_post(body, strict=False):
             return None
         parsed    = parse_text(body)
         user      = msg.get("user", {})
