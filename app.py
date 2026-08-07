@@ -19,6 +19,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from functools import lru_cache
+from typing import Optional
 
 from flask import Flask, jsonify, request, render_template_string
 from flask_cors import CORS
@@ -41,14 +42,19 @@ CORS(app)
 _CACHE: dict = {
     "data": [],
     "last_updated": None,
-    "is_mock": False,
+    "is_mock": True,
 }
 _CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
 _cache_lock = threading.Lock()
 
+# Seed cache immediately with mock data so the first request never blocks
+_CACHE["data"] = get_mock_data()
+_CACHE["is_mock"] = True
+logger.info("Cache pre-seeded with %d mock entries.", len(_CACHE["data"]))
+
 
 def _load_data(force: bool = False) -> list:
-    """Load recommendations, using cache if fresh enough."""
+    """Return cached data immediately; trigger a background refresh if stale."""
     with _cache_lock:
         now = datetime.now(timezone.utc)
         last = _CACHE["last_updated"]
@@ -56,28 +62,27 @@ def _load_data(force: bool = False) -> list:
             last is None
             or (now - last).total_seconds() > _CACHE_TTL_SECONDS
         )
+        if not force and not cache_stale:
+            return _CACHE["data"]
 
         if force or cache_stale:
-            # Always try live fetch first — ntscraper works without any API key.
-            # Twitter API v2 is attempted as a secondary if ntscraper returns nothing.
-            # Mock data is used only as the final fallback.
-            logger.info("Fetching live recommendations (ntscraper → Twitter API → mock)…")
+            logger.info("Fetching live recommendations (Twitter → mock fallback)…")
             fetched = fetch_recommendations()
             if fetched:
                 _CACHE["data"] = fetched
                 _CACHE["is_mock"] = False
                 logger.info("Live data loaded: %d recommendations.", len(fetched))
             else:
-                logger.warning("All live sources returned no data — using mock data.")
-                _CACHE["data"] = get_mock_data()
+                logger.warning("No live data — keeping mock data.")
+                if not _CACHE["data"]:
+                    _CACHE["data"] = get_mock_data()
                 _CACHE["is_mock"] = True
-
             _CACHE["last_updated"] = now
 
         return _CACHE["data"]
 
 
-def _filter_data(data: list, horizon: str | None, instrument_type: str | None = None, expiry_type: str | None = None) -> list:
+def _filter_data(data: list, horizon: Optional[str], instrument_type: Optional[str] = None, expiry_type: Optional[str] = None) -> list:
     if horizon and horizon in ("today", "tomorrow", "monthly"):
         data = [r for r in data if r.get("horizon") == horizon]
     if instrument_type and instrument_type in ("index", "stock"):
@@ -108,13 +113,14 @@ def _sort_data(data: list, sort_by: str = "followers") -> list:
 # ---------------------------------------------------------------------------
 
 def _background_refresh():
+    # Kick off an immediate live fetch on first run, then every TTL seconds.
     while True:
-        time.sleep(_CACHE_TTL_SECONDS)
         try:
             _load_data(force=True)
             logger.info("Background cache refreshed.")
         except Exception as exc:
             logger.error("Background refresh failed: %s", exc)
+        time.sleep(_CACHE_TTL_SECONDS)
 
 
 _refresh_thread = threading.Thread(target=_background_refresh, daemon=True)
