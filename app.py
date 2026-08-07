@@ -36,7 +36,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------------------------------------------------------------------------
-# In-memory data store with TTL-based caching
+# In-memory data store with lock-free read pattern
 # ---------------------------------------------------------------------------
 
 _CACHE: dict = {
@@ -47,39 +47,41 @@ _CACHE: dict = {
 _CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
 _cache_lock = threading.Lock()
 
-# Seed cache immediately with mock data so the first request never blocks
+# Seed cache immediately with mock data — API routes always respond instantly
 _CACHE["data"] = get_mock_data()
 _CACHE["is_mock"] = True
 logger.info("Cache pre-seeded with %d mock entries.", len(_CACHE["data"]))
 
 
-def _load_data(force: bool = False) -> list:
-    """Return cached data immediately; trigger a background refresh if stale."""
+def _get_data() -> list:
+    """Return current cached data instantly — never blocks."""
     with _cache_lock:
-        now = datetime.now(timezone.utc)
-        last = _CACHE["last_updated"]
-        cache_stale = (
-            last is None
-            or (now - last).total_seconds() > _CACHE_TTL_SECONDS
-        )
-        if not force and not cache_stale:
-            return _CACHE["data"]
+        return list(_CACHE["data"])
 
-        if force or cache_stale:
-            logger.info("Fetching live recommendations (Twitter → mock fallback)…")
-            fetched = fetch_recommendations()
-            if fetched:
-                _CACHE["data"] = fetched
-                _CACHE["is_mock"] = False
-                logger.info("Live data loaded: %d recommendations.", len(fetched))
-            else:
-                logger.warning("No live data — keeping mock data.")
-                if not _CACHE["data"]:
-                    _CACHE["data"] = get_mock_data()
+
+def _do_refresh() -> None:
+    """
+    Fetch live data and update cache.
+    The slow network fetch happens OUTSIDE the lock so API routes are never blocked.
+    """
+    logger.info("Background: fetching live recommendations from Twitter…")
+    try:
+        fetched = fetch_recommendations()
+    except Exception as exc:
+        logger.error("fetch_recommendations failed: %s", exc)
+        fetched = []
+
+    with _cache_lock:
+        if fetched:
+            _CACHE["data"] = fetched
+            _CACHE["is_mock"] = False
+            logger.info("Cache updated: %d live recommendations.", len(fetched))
+        else:
+            logger.warning("No live data returned — retaining existing cache.")
+            if not _CACHE["data"]:
+                _CACHE["data"] = get_mock_data()
                 _CACHE["is_mock"] = True
-            _CACHE["last_updated"] = now
-
-        return _CACHE["data"]
+        _CACHE["last_updated"] = datetime.now(timezone.utc)
 
 
 def _filter_data(data: list, horizon: Optional[str], instrument_type: Optional[str] = None, expiry_type: Optional[str] = None) -> list:
@@ -100,7 +102,6 @@ def _sort_data(data: list, sort_by: str = "followers") -> list:
             key=lambda r: r.get("likes", 0) + r.get("retweets", 0) * 3,
             reverse=True,
         )
-    # Default: sort by author follower count
     return sorted(
         data,
         key=lambda r: r.get("author", {}).get("followers", 0),
@@ -109,17 +110,13 @@ def _sort_data(data: list, sort_by: str = "followers") -> list:
 
 
 # ---------------------------------------------------------------------------
-# Background auto-refresh thread
+# Background auto-refresh thread (fetch lives here — NOT in request handlers)
 # ---------------------------------------------------------------------------
 
 def _background_refresh():
-    # Kick off an immediate live fetch on first run, then every TTL seconds.
+    """Fetch live data immediately on startup, then every TTL seconds."""
     while True:
-        try:
-            _load_data(force=True)
-            logger.info("Background cache refreshed.")
-        except Exception as exc:
-            logger.error("Background refresh failed: %s", exc)
+        _do_refresh()
         time.sleep(_CACHE_TTL_SECONDS)
 
 
@@ -133,13 +130,13 @@ _refresh_thread.start()
 
 @app.route("/api/recommendations")
 def api_recommendations():
-    horizon         = request.args.get("horizon")          # today | tomorrow | monthly | None
-    sort_by         = request.args.get("sort", "followers")   # followers | engagement
+    horizon         = request.args.get("horizon")
+    sort_by         = request.args.get("sort", "followers")
     search          = request.args.get("q", "").strip().upper()
-    instrument_type = request.args.get("instrument_type")   # index | stock | None
-    expiry_type     = request.args.get("expiry_type")        # weekly | monthly | None
+    instrument_type = request.args.get("instrument_type")
+    expiry_type     = request.args.get("expiry_type")
 
-    data = _load_data()
+    data = _get_data()
     data = _filter_data(data, horizon, instrument_type, expiry_type)
 
     if search:
@@ -152,10 +149,14 @@ def api_recommendations():
 
     data = _sort_data(data, sort_by)
 
+    with _cache_lock:
+        is_mock     = _CACHE["is_mock"]
+        last_upd    = _CACHE["last_updated"]
+
     return jsonify({
         "success": True,
-        "is_mock": _CACHE["is_mock"],
-        "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,
+        "is_mock": is_mock,
+        "last_updated": last_upd.isoformat() if last_upd else None,
         "count": len(data),
         "recommendations": data,
     })
@@ -163,18 +164,21 @@ def api_recommendations():
 
 @app.route("/api/refresh")
 def api_refresh():
-    _load_data(force=True)
-    return jsonify({
-        "success": True,
-        "is_mock": _CACHE["is_mock"],
-        "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,
-        "count": len(_CACHE["data"]),
-    })
+    # Trigger a background refresh (non-blocking) and return current cache
+    threading.Thread(target=_do_refresh, daemon=True).start()
+    with _cache_lock:
+        return jsonify({
+            "success": True,
+            "is_mock": _CACHE["is_mock"],
+            "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,
+            "count": len(_CACHE["data"]),
+            "message": "Refresh triggered in background.",
+        })
 
 
 @app.route("/api/stats")
 def api_stats():
-    data = _load_data()
+    data = _get_data()
     today_cnt     = sum(1 for r in data if r.get("horizon") == "today")
     tomorrow_cnt  = sum(1 for r in data if r.get("horizon") == "tomorrow")
     monthly_cnt   = sum(1 for r in data if r.get("horizon") == "monthly")
@@ -202,6 +206,10 @@ def api_stats():
         top_authors.values(), key=lambda x: x["followers"], reverse=True
     )[:5]
 
+    with _cache_lock:
+        is_mock  = _CACHE["is_mock"]
+        last_upd = _CACHE["last_updated"]
+
     return jsonify({
         "success": True,
         "total": len(data),
@@ -215,8 +223,8 @@ def api_stats():
         "weekly_count": weekly_cnt,
         "monthly_expiry_count": monthly_exp_cnt,
         "top_authors": top_authors_list,
-        "is_mock": _CACHE["is_mock"],
-        "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,
+        "is_mock": is_mock,
+        "last_updated": last_upd.isoformat() if last_upd else None,
     })
 
 
@@ -235,11 +243,7 @@ def index():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Railway/Render inject PORT automatically; fall back to 5000 locally
     port = int(os.getenv("PORT", os.getenv("FLASK_PORT", 5000)))
-    # Disable debug in production (when PORT is set by the platform)
     debug = os.getenv("FLASK_DEBUG", "False").lower() == "true" if os.getenv("PORT") else True
     logger.info("Starting Stock Option Recommendation Server on port %d (debug=%s)", port, debug)
-    # Pre-warm the cache
-    _load_data()
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
