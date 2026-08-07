@@ -170,15 +170,18 @@ def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
     """
     try:
         from ntscraper import Nitter
-    except ImportError:
-        logger.warning("ntscraper not installed. Run: pip install ntscraper")
+    except ImportError as e:
+        logger.warning("ntscraper/lxml not available (%s). Skipping ntscraper.", e)
+        return []
+    except Exception as e:
+        logger.warning("ntscraper import error: %s", e)
         return []
 
     results = []
     seen_ids = set()
 
     try:
-        scraper = Nitter(log_level=1, skip_instance_check=False)
+        scraper = Nitter(log_level=1, skip_instance_check=True)
     except Exception as exc:
         logger.warning("ntscraper init failed: %s", exc)
         return []

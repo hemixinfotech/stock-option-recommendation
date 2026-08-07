@@ -5,4 +5,5 @@ python-dotenv==1.0.1
 requests==2.32.3
 schedule==1.2.2
 gunicorn==22.0.0
-ntscraper==0.3.8
+lxml
+ntscraper
