@@ -1,20 +1,18 @@
 """
 twitter_fetcher.py
 ------------------
-Fetches stock option recommendation tweets for Indian equity markets (NSE/BSE).
+Fetches stock option recommendation posts for Indian equity markets (NSE/BSE).
 
-Strategy (in order):
-  1. Twitter Guest Token API  — FREE, no API key, uses Twitter's own internal API
-  2. ntscraper (Nitter)       — FREE fallback, depends on Nitter instance availability
-  3. Twitter API v2 (tweepy)  — requires Basic tier ($100/mo)
-  4. Mock data                — always works as final fallback
+Strategy (in order — all FREE, no API key required):
+  1. StockTwits API       — public REST API, no key needed, built-in sentiment
+  2. Reddit JSON API      — r/IndianStockMarket, r/IndiaInvestments (no auth needed)
+  3. Twitter API v2       — only if Bearer Token set (requires paid Basic tier)
+  4. Mock data            — always works as final fallback
 
-Parses tweets to extract:
-  - Stock symbol / instrument name
-  - Option type (CE / PE)
-  - Buy/Entry price, Target price(s), Stop-loss
-  - Author info (name, handle, follower count, avatar)
-  - Tweet timestamp & URL
+Parses posts to extract:
+  - Stock symbol, Option type (CE/PE), Strike price
+  - Buy/Entry price, Target(s), Stop-loss
+  - Author info (name, handle, followers)
   - Time horizon: today | tomorrow | monthly
 """
 
@@ -36,88 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(me
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Twitter Guest Token — uses the same bearer token Twitter's own website uses
-# This allows free, unauthenticated search without any developer account
-# ---------------------------------------------------------------------------
-
-# Twitter's public bearer token (same one used by twitter.com frontend)
-_TWITTER_PUBLIC_BEARER = (
-    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeRDkYzo%3D"
-    "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-)
-
-_GUEST_TOKEN: Optional[str] = None
-_GUEST_TOKEN_TS: float = 0.0
-_GUEST_TOKEN_TTL: float = 3600  # refresh every hour
-
-_REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://twitter.com/",
-    "Origin": "https://twitter.com",
-}
-
-
-def _get_guest_token() -> Optional[str]:
-    """Obtain a Twitter guest token (valid ~1 hour)."""
-    global _GUEST_TOKEN, _GUEST_TOKEN_TS
-
-    now = time.time()
-    if _GUEST_TOKEN and (now - _GUEST_TOKEN_TS) < _GUEST_TOKEN_TTL:
-        return _GUEST_TOKEN
-
-    try:
-        resp = requests.post(
-            "https://api.twitter.com/1.1/guest/activate.json",
-            headers={
-                **_REQUEST_HEADERS,
-                "Authorization": f"Bearer {_TWITTER_PUBLIC_BEARER}",
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        token = resp.json().get("guest_token")
-        if token:
-            _GUEST_TOKEN = token
-            _GUEST_TOKEN_TS = now
-            logger.info("[GuestToken] Obtained new guest token.")
-            return token
-    except Exception as exc:
-        logger.warning("[GuestToken] Failed to get guest token: %s", exc)
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Search queries for Indian equity option tweets
-# ---------------------------------------------------------------------------
-
-SEARCH_QUERIES = [
-    "BANKNIFTY CE OR PE target SL buy -is:retweet",
-    "NIFTY CE OR PE target SL intraday -is:retweet",
-    "NIFTY OR BANKNIFTY CE PE buy target stoploss -is:retweet",
-    "#BankNifty CE PE buy target SL -is:retweet",
-    "#optionstrading NIFTY target SL -is:retweet",
-    "NSE CE PE buy target SL swing -is:retweet",
-]
-
-# Simpler queries for v1.1 search (no operators like -is:retweet)
-SEARCH_QUERIES_V1 = [
-    "BANKNIFTY CE PE target SL",
-    "NIFTY CE PE target SL intraday",
-    "BANKNIFTY CE buy target stoploss",
-    "NIFTY50 CE PE buy target SL",
-    "#BankNifty CE PE target SL",
-    "NSE options CE PE target SL",
-]
-
-# ---------------------------------------------------------------------------
-# Regex patterns to extract option data from tweet text
+# Regex patterns (shared across all sources)
 # ---------------------------------------------------------------------------
 
 SYMBOL_PATTERN = re.compile(
@@ -127,10 +44,9 @@ SYMBOL_PATTERN = re.compile(
     r"HINDUNILVR|ITC|LT|SUNPHARMA|DRREDDY|CIPLA|"
     r"TITAN|ADANIPORTS|ADANIENT|POWERGRID|NTPC|ONGC|"
     r"COALINDIA|TECHM|HCLTECH|ASIANPAINT|ULTRACEMCO|"
-    r"BAJAJFINSV|NESTLEIND|BRITANNIA|EICHERMOT|HEROMOTOCO)\b",
+    r"BAJAJFINSV|NESTLEIND|EICHERMOT|HEROMOTOCO)\b",
     re.IGNORECASE,
 )
-
 OPTION_TYPE_PATTERN = re.compile(r"\b(CE|PE)\b", re.IGNORECASE)
 STRIKE_PATTERN      = re.compile(r"\b(\d{4,6})\s*(CE|PE)\b", re.IGNORECASE)
 BUY_PRICE_PATTERN   = re.compile(
@@ -145,7 +61,7 @@ SL_PATTERN = re.compile(
     r"(?:sl|stoploss|stop\s*loss|slw?)\s*[:\-]?\s*(?:rs\.?|₹)?\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|for\s*today|eod)\b", re.IGNORECASE)
+TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|eod)\b", re.IGNORECASE)
 TOMORROW_KEYWORDS = re.compile(r"\b(tomorrow|tmrw|next\s*day|positional\s*day)\b", re.IGNORECASE)
 MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|expiry|weekly|swing)\b", re.IGNORECASE)
 EXPIRY_PATTERN    = re.compile(
@@ -153,15 +69,17 @@ EXPIRY_PATTERN    = re.compile(
     re.IGNORECASE,
 )
 
-# Detect retweet
-RT_PATTERN = re.compile(r"^RT\s+@", re.IGNORECASE)
+_BASE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
 
 
 # ---------------------------------------------------------------------------
 # Core parser
 # ---------------------------------------------------------------------------
 
-def parse_tweet(text: str) -> dict:
+def parse_text(text: str) -> dict:
     text_upper = text.upper()
 
     strike_matches = STRIKE_PATTERN.findall(text_upper)
@@ -179,14 +97,17 @@ def parse_tweet(text: str) -> dict:
             symbols.append(s)
     symbol = symbols[0] if symbols else None
 
-    buy_matches = BUY_PRICE_PATTERN.findall(text)
-    buy_price   = float(buy_matches[0]) if buy_matches else None
+    buy_price = None
+    bm = BUY_PRICE_PATTERN.findall(text)
+    if bm:
+        buy_price = float(bm[0])
 
-    tgt_matches = TARGET_PATTERN.findall(text)
-    targets     = [float(t) for t in tgt_matches[:2]]
+    targets = [float(t) for t in TARGET_PATTERN.findall(text)[:2]]
 
-    sl_matches = SL_PATTERN.findall(text)
-    stop_loss  = float(sl_matches[0]) if sl_matches else None
+    stop_loss = None
+    sm = SL_PATTERN.findall(text)
+    if sm:
+        stop_loss = float(sm[0])
 
     if TODAY_KEYWORDS.search(text):
         horizon = "today"
@@ -197,8 +118,8 @@ def parse_tweet(text: str) -> dict:
     else:
         horizon = "monthly" if EXPIRY_PATTERN.search(text_upper) else "today"
 
-    expiry_match = EXPIRY_PATTERN.search(text_upper)
-    expiry = expiry_match.group(1) if expiry_match else None
+    expiry_m = EXPIRY_PATTERN.search(text_upper)
+    expiry = expiry_m.group(1) if expiry_m else None
 
     return {
         "symbol":       symbol,
@@ -212,232 +133,323 @@ def parse_tweet(text: str) -> dict:
     }
 
 
-def determine_sentiment(option_type: Optional[str]) -> str:
+def determine_sentiment(option_type: Optional[str], hint: str = "") -> str:
+    if hint.lower() == "bullish":
+        return "BULLISH"
+    if hint.lower() == "bearish":
+        return "BEARISH"
     if not option_type:
         return "NEUTRAL"
     return "BULLISH" if option_type.upper() == "CE" else "BEARISH"
 
 
-def _build_author(user: dict) -> dict:
-    """Build a normalised author dict from Twitter v1.1 user object."""
-    return {
-        "name":              user.get("name", ""),
-        "handle":            f"@{user.get('screen_name', '')}",
-        "username":          user.get("screen_name", ""),
-        "followers":         user.get("followers_count", 0),
-        "following":         user.get("friends_count", 0),
-        "tweet_count":       user.get("statuses_count", 0),
-        "profile_image_url": user.get("profile_image_url_https", "").replace("_normal", "_400x400"),
-        "description":       user.get("description", ""),
-        "verified":          user.get("verified", False),
-    }
-
-
-def _parse_twitter_date(date_str: str) -> str:
-    """Convert Twitter date string to ISO format."""
-    try:
-        dt = datetime.strptime(date_str, "%a %b %d %H:%M:%S +0000 %Y")
-        return dt.replace(tzinfo=timezone.utc).isoformat()
-    except Exception:
-        return datetime.now(timezone.utc).isoformat()
+def _is_useful(parsed: dict) -> bool:
+    """A post must have at least a known symbol OR a strike price to be included."""
+    return bool(parsed.get("symbol") or parsed.get("strike_price"))
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1 — Twitter Guest Token (FREE, no developer account needed)
+# Strategy 1 — StockTwits Public API (completely free, no key)
 # ---------------------------------------------------------------------------
 
-def fetch_via_guest_token(max_results: int = 50) -> list[dict]:
-    """
-    Search Twitter using the guest token API (Twitter v1.1 search/tweets.json).
-    Completely free — uses Twitter's own public bearer token that their website uses.
-    """
-    guest_token = _get_guest_token()
-    if not guest_token:
-        logger.warning("[GuestToken] Could not obtain guest token.")
-        return []
+# StockTwits symbols that cover Indian equity options
+STOCKTWITS_SYMBOLS = [
+    "NIFTY", "BANKNIFTY", "SENSEX",
+    "RELIANCE", "HDFCBANK", "TCS", "INFY", "SBIN",
+    "ICICIBANK", "AXISBANK", "TATAMOTORS", "WIPRO",
+]
 
-    headers = {
-        **_REQUEST_HEADERS,
-        "Authorization":  f"Bearer {_TWITTER_PUBLIC_BEARER}",
-        "x-guest-token":  guest_token,
-        "x-twitter-client-language": "en",
-        "x-twitter-active-user": "yes",
-    }
-
-    results  = []
-    seen_ids = set()
-
-    for query in SEARCH_QUERIES_V1[:4]:
-        logger.info("[GuestToken] Searching: %s", query)
-        try:
-            resp = requests.get(
-                "https://api.twitter.com/1.1/search/tweets.json",
-                headers=headers,
-                params={
-                    "q":          query,
-                    "count":      min(max_results, 100),
-                    "tweet_mode": "extended",
-                    "lang":       "en",
-                    "result_type": "recent",
-                },
-                timeout=15,
-            )
-
-            if resp.status_code == 429:
-                logger.warning("[GuestToken] Rate limited. Sleeping 10s…")
-                time.sleep(10)
-                continue
-            if resp.status_code in (401, 403):
-                logger.warning("[GuestToken] Auth error %d — guest token expired, refreshing.", resp.status_code)
-                _GUEST_TOKEN = None
-                guest_token = _get_guest_token()
-                if guest_token:
-                    headers["x-guest-token"] = guest_token
-                continue
-            if not resp.ok:
-                logger.warning("[GuestToken] HTTP %d for query [%s]", resp.status_code, query)
-                continue
-
-            data = resp.json()
-            statuses = data.get("statuses", [])
-
-        except requests.RequestException as exc:
-            logger.warning("[GuestToken] Request failed [%s]: %s", query, exc)
-            continue
-
-        for tw in statuses:
-            tweet_id = str(tw.get("id_str", tw.get("id", "")))
-            if not tweet_id or tweet_id in seen_ids:
-                continue
-            seen_ids.add(tweet_id)
-
-            # Skip retweets
-            text = tw.get("full_text") or tw.get("text", "")
-            if RT_PATTERN.match(text):
-                continue
-
-            parsed = parse_tweet(text)
-            # Must have at least a symbol OR a strike price to be useful
-            if not parsed["symbol"] and not parsed["strike_price"]:
-                continue
-
-            user   = tw.get("user", {})
-            author = _build_author(user)
-
-            rec = {
-                "id":         tweet_id,
-                "text":       text,
-                "tweet_url":  f"https://x.com/{author['username']}/status/{tweet_id}",
-                "created_at": _parse_twitter_date(tw.get("created_at", "")),
-                **parsed,
-                "sentiment":  determine_sentiment(parsed.get("option_type")),
-                "likes":      tw.get("favorite_count", 0),
-                "retweets":   tw.get("retweet_count", 0),
-                "replies":    tw.get("reply_count", 0),
-                "author":     author,
-            }
-            results.append(rec)
-
-        # Small delay between queries to be respectful
-        time.sleep(random.uniform(0.5, 1.5))
-
-    logger.info("[GuestToken] Total parsed: %d", len(results))
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Strategy 2 — ntscraper (Nitter-based, works when Nitter instances are up)
-# ---------------------------------------------------------------------------
-
-NTSCRAPER_QUERIES = [
-    "BANKNIFTY CE PE target SL",
+STOCKTWITS_SEARCH_TERMS = [
     "NIFTY CE PE target SL",
-    "#BankNifty CE PE buy target",
-    "#optionstrading NIFTY target SL",
+    "BANKNIFTY CE target stoploss",
+    "NSE options CE PE buy target",
+    "NIFTY50 intraday CE PE",
 ]
 
 
-def fetch_via_ntscraper(max_results: int = 50) -> list[dict]:
-    try:
-        from ntscraper import Nitter
-    except (ImportError, Exception) as e:
-        logger.warning("[ntscraper] Not available: %s", e)
-        return []
-
+def fetch_via_stocktwits(max_results: int = 60) -> list[dict]:
+    """
+    Fetch from StockTwits public API.
+    Endpoint: https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json
+    Also uses /search/messages to find CE/PE option posts.
+    No API key or account needed.
+    """
     results  = []
     seen_ids = set()
 
-    try:
-        scraper = Nitter(log_level=1, skip_instance_check=True)
-    except Exception as exc:
-        logger.warning("[ntscraper] Init failed: %s", exc)
-        return []
+    def _process_message(msg: dict, source_symbol: str = "") -> Optional[dict]:
+        msg_id = str(msg.get("id", ""))
+        if not msg_id or msg_id in seen_ids:
+            return None
+        seen_ids.add(msg_id)
 
-    for query in NTSCRAPER_QUERIES[:3]:
-        logger.info("[ntscraper] Searching: %s", query)
+        body = msg.get("body", "")
+        if not body:
+            return None
+
+        # Only process posts that mention CE or PE (option trades)
+        if not OPTION_TYPE_PATTERN.search(body):
+            return None
+
+        parsed = parse_text(body)
+        if not _is_useful(parsed):
+            return None
+
+        user = msg.get("user", {})
+        # StockTwits sentiment
+        entities  = msg.get("entities", {}) or {}
+        sentiment = (entities.get("sentiment") or {}).get("basic", "")
+
+        username  = user.get("username", "stocktwits_user")
+        followers = user.get("followers", 0) or 0
+        verified  = bool(user.get("official", False) or user.get("verified", False))
+
+        created_raw = msg.get("created_at", "")
         try:
-            tweets_data = scraper.get_tweets(query, mode="term", number=20)
-            tweets = tweets_data.get("tweets", []) if isinstance(tweets_data, dict) else []
+            created_at = datetime.strptime(created_raw, "%Y-%m-%dT%H:%M:%SZ")
+            created_at = created_at.replace(tzinfo=timezone.utc).isoformat()
+        except Exception:
+            created_at = datetime.now(timezone.utc).isoformat()
+
+        likes = (msg.get("likes") or {}).get("total", 0) or 0
+
+        return {
+            "id":         f"st_{msg_id}",
+            "text":       body,
+            "tweet_url":  f"https://stocktwits.com/{username}/message/{msg_id}",
+            "created_at": created_at,
+            **parsed,
+            "sentiment":  determine_sentiment(parsed.get("option_type"), sentiment),
+            "likes":      likes,
+            "retweets":   msg.get("reshares", {}).get("total", 0) if isinstance(msg.get("reshares"), dict) else 0,
+            "replies":    msg.get("replies", {}).get("total", 0) if isinstance(msg.get("replies"), dict) else 0,
+            "author": {
+                "name":              user.get("name", username),
+                "handle":            f"@{username}",
+                "username":          username,
+                "followers":         followers,
+                "following":         user.get("following", 0) or 0,
+                "tweet_count":       user.get("ideas", 0) or 0,
+                "profile_image_url": user.get("avatar_url_ssl", "") or user.get("avatar_url", ""),
+                "description":       user.get("classification", "StockTwits trader"),
+                "verified":          verified,
+            },
+            "source": "stocktwits",
+        }
+
+    # --- Symbol stream ---
+    for symbol in STOCKTWITS_SYMBOLS[:8]:
+        if len(results) >= max_results:
+            break
+        url = f"https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
+        logger.info("[StockTwits] Fetching symbol stream: %s", symbol)
+        try:
+            resp = requests.get(url, headers=_BASE_HEADERS, timeout=10)
+            if resp.status_code == 429:
+                logger.warning("[StockTwits] Rate limited. Sleeping 5s…")
+                time.sleep(5)
+                continue
+            if not resp.ok:
+                logger.warning("[StockTwits] HTTP %d for symbol %s", resp.status_code, symbol)
+                continue
+            messages = resp.json().get("messages", [])
         except Exception as exc:
-            logger.warning("[ntscraper] Query failed [%s]: %s", query, exc)
+            logger.warning("[StockTwits] Symbol stream failed [%s]: %s", symbol, exc)
             continue
 
-        for tw in tweets:
-            tweet_id = tw.get("link", "") or str(len(results))
-            if tweet_id in seen_ids:
+        for msg in messages:
+            rec = _process_message(msg, symbol)
+            if rec:
+                results.append(rec)
+
+        time.sleep(random.uniform(0.3, 0.8))
+
+    # --- Search endpoint ---
+    for term in STOCKTWITS_SEARCH_TERMS[:3]:
+        if len(results) >= max_results:
+            break
+        logger.info("[StockTwits] Search: %s", term)
+        try:
+            resp = requests.get(
+                "https://api.stocktwits.com/api/2/search/messages.json",
+                headers=_BASE_HEADERS,
+                params={"q": term, "limit": 30},
+                timeout=10,
+            )
+            if not resp.ok:
                 continue
-            seen_ids.add(tweet_id)
+            messages = resp.json().get("results", [])
+        except Exception as exc:
+            logger.warning("[StockTwits] Search failed [%s]: %s", term, exc)
+            continue
 
-            text = tw.get("text", "")
-            if not text:
-                continue
+        for msg in messages:
+            rec = _process_message(msg)
+            if rec:
+                results.append(rec)
 
-            parsed = parse_tweet(text)
-            if not parsed["symbol"] and not parsed["strike_price"]:
-                continue
+        time.sleep(random.uniform(0.3, 0.8))
 
-            user     = tw.get("user", {})
-            username = user.get("username", "unknown")
-            name     = user.get("name", username)
-
-            try:
-                date_str   = tw.get("date", "")
-                created_at = datetime.strptime(date_str, "%b %d, %Y · %I:%M %p UTC")
-                created_at = created_at.replace(tzinfo=timezone.utc).isoformat()
-            except Exception:
-                created_at = datetime.now(timezone.utc).isoformat()
-
-            stats = tw.get("stats", {})
-            rec = {
-                "id":         tweet_id,
-                "text":       text,
-                "tweet_url":  tw.get("link", f"https://x.com/{username}"),
-                "created_at": created_at,
-                **parsed,
-                "sentiment":  determine_sentiment(parsed.get("option_type")),
-                "likes":      int(stats.get("likes", 0) or 0),
-                "retweets":   int(stats.get("retweets", 0) or 0),
-                "replies":    int(stats.get("comments", 0) or 0),
-                "author": {
-                    "name":              name,
-                    "handle":            f"@{username}",
-                    "username":          username,
-                    "followers":         int(user.get("followers", 0) or 0),
-                    "following":         int(user.get("following", 0) or 0),
-                    "tweet_count":       int(user.get("tweets", 0) or 0),
-                    "profile_image_url": user.get("avatar", ""),
-                    "description":       user.get("bio", ""),
-                    "verified":          bool(user.get("verified", False)),
-                },
-            }
-            results.append(rec)
-
-    logger.info("[ntscraper] Total parsed: %d", len(results))
+    logger.info("[StockTwits] Total useful posts: %d", len(results))
     return results
 
 
 # ---------------------------------------------------------------------------
-# Strategy 3 — Twitter API v2 (requires paid Basic tier)
+# Strategy 2 — Reddit Public JSON API (no key, no auth needed)
+# ---------------------------------------------------------------------------
+
+REDDIT_SUBREDDITS = [
+    "IndianStockMarket",
+    "IndiaInvestments",
+    "Nifty",
+    "NSEbets",
+]
+
+REDDIT_SEARCH_TERMS = [
+    "CE PE target SL",
+    "NIFTY CE buy target",
+    "BANKNIFTY option call",
+    "options intraday target stoploss",
+]
+
+_REDDIT_HEADERS = {
+    "User-Agent": "OptionSignalsIndia/1.0 (stock option dashboard)",
+    "Accept": "application/json",
+}
+
+
+def fetch_via_reddit(max_results: int = 40) -> list[dict]:
+    """
+    Fetch from Reddit public JSON API.
+    Works without any authentication or API key.
+    """
+    results  = []
+    seen_ids = set()
+
+    def _process_post(post_data: dict) -> Optional[dict]:
+        post_id = post_data.get("id", "")
+        if not post_id or post_id in seen_ids:
+            return None
+        seen_ids.add(post_id)
+
+        title = post_data.get("title", "")
+        body  = post_data.get("selftext", "") or ""
+        text  = f"{title}\n{body}".strip()
+
+        if not text or len(text) < 20:
+            return None
+
+        # Must mention CE or PE for option trades
+        if not OPTION_TYPE_PATTERN.search(text):
+            return None
+
+        parsed = parse_text(text)
+        if not _is_useful(parsed):
+            return None
+
+        author    = post_data.get("author", "redditor")
+        score     = post_data.get("score", 0) or 0
+        comments  = post_data.get("num_comments", 0) or 0
+        subreddit = post_data.get("subreddit", "")
+
+        created_utc = post_data.get("created_utc", 0)
+        try:
+            created_at = datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+        except Exception:
+            created_at = datetime.now(timezone.utc).isoformat()
+
+        permalink = post_data.get("permalink", "")
+        post_url  = f"https://reddit.com{permalink}" if permalink else f"https://reddit.com/r/{subreddit}"
+
+        return {
+            "id":         f"reddit_{post_id}",
+            "text":       text[:500],
+            "tweet_url":  post_url,
+            "created_at": created_at,
+            **parsed,
+            "sentiment":  determine_sentiment(parsed.get("option_type")),
+            "likes":      score,
+            "retweets":   0,
+            "replies":    comments,
+            "author": {
+                "name":              author,
+                "handle":            f"u/{author}",
+                "username":          author,
+                "followers":         post_data.get("author_karma", 0) or 0,
+                "following":         0,
+                "tweet_count":       0,
+                "profile_image_url": "",
+                "description":       f"Reddit u/{author} on r/{subreddit}",
+                "verified":          False,
+            },
+            "source": "reddit",
+        }
+
+    # Search across subreddits
+    for subreddit in REDDIT_SUBREDDITS[:3]:
+        for term in REDDIT_SEARCH_TERMS[:2]:
+            if len(results) >= max_results:
+                break
+            url = f"https://www.reddit.com/r/{subreddit}/search.json"
+            logger.info("[Reddit] Searching r/%s for: %s", subreddit, term)
+            try:
+                resp = requests.get(
+                    url,
+                    headers=_REDDIT_HEADERS,
+                    params={"q": term, "sort": "new", "limit": 25, "restrict_sr": "true"},
+                    timeout=12,
+                )
+                if resp.status_code == 429:
+                    logger.warning("[Reddit] Rate limited. Sleeping 5s…")
+                    time.sleep(5)
+                    continue
+                if not resp.ok:
+                    logger.warning("[Reddit] HTTP %d for r/%s", resp.status_code, subreddit)
+                    continue
+                posts = resp.json().get("data", {}).get("children", [])
+            except Exception as exc:
+                logger.warning("[Reddit] Failed [r/%s]: %s", subreddit, exc)
+                continue
+
+            for post in posts:
+                rec = _process_post(post.get("data", {}))
+                if rec:
+                    results.append(rec)
+
+            time.sleep(random.uniform(0.5, 1.0))
+
+    # Also fetch hot posts from key subreddits
+    for subreddit in ["IndianStockMarket", "NSEbets"]:
+        if len(results) >= max_results:
+            break
+        logger.info("[Reddit] Hot posts from r/%s", subreddit)
+        try:
+            resp = requests.get(
+                f"https://www.reddit.com/r/{subreddit}/new.json",
+                headers=_REDDIT_HEADERS,
+                params={"limit": 25},
+                timeout=12,
+            )
+            if not resp.ok:
+                continue
+            posts = resp.json().get("data", {}).get("children", [])
+        except Exception as exc:
+            logger.warning("[Reddit] Failed [r/%s new]: %s", subreddit, exc)
+            continue
+
+        for post in posts:
+            rec = _process_post(post.get("data", {}))
+            if rec:
+                results.append(rec)
+
+        time.sleep(random.uniform(0.5, 1.0))
+
+    logger.info("[Reddit] Total useful posts: %d", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy 3 — Twitter API v2 (requires paid Basic tier — kept as optional)
 # ---------------------------------------------------------------------------
 
 def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
@@ -451,42 +463,33 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
         return []
 
     try:
-        client = tweepy.Client(
-            bearer_token=bearer,
-            consumer_key=os.getenv("TWITTER_API_KEY"),
-            consumer_secret=os.getenv("TWITTER_API_SECRET"),
-            access_token=os.getenv("TWITTER_ACCESS_TOKEN"),
-            access_token_secret=os.getenv("TWITTER_ACCESS_TOKEN_SECRET"),
-            wait_on_rate_limit=True,
-        )
-    except Exception as exc:
-        logger.warning("[Twitter API v2] Client init failed: %s", exc)
+        client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=True)
+    except Exception:
         return []
 
     results  = []
     seen_ids = set()
-    api_queries = [
+    queries  = [
         "(NIFTY OR BANKNIFTY) (CE OR PE) (target OR SL) -is:retweet",
         "(NSE OR BSE) (CE OR PE) (target OR buy) -is:retweet",
     ]
 
-    for query in api_queries:
+    for query in queries:
         logger.info("[Twitter API v2] Searching: %s", query)
         try:
             response = client.search_recent_tweets(
                 query=query,
                 max_results=min(max_per_query, 100),
                 tweet_fields=["created_at", "public_metrics", "author_id"],
-                user_fields=["name", "username", "public_metrics",
-                             "profile_image_url", "description", "verified"],
+                user_fields=["name", "username", "public_metrics", "profile_image_url", "description", "verified"],
                 expansions=["author_id"],
             )
         except Exception as exc:
             msg = str(exc)
-            if "402" in msg or "403" in msg or "Payment" in msg:
-                logger.warning("[Twitter API v2] 402/403 — Basic tier required. Skipping.")
+            if any(c in msg for c in ["402", "403", "Payment"]):
+                logger.warning("[Twitter API v2] Payment required — skipping.")
                 break
-            logger.warning("[Twitter API v2] Error [%s]: %s", query, exc)
+            logger.warning("[Twitter API v2] Error: %s", exc)
             continue
 
         if not response or not response.data:
@@ -497,42 +500,37 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
             for u in response.includes["users"]:
                 m = u.public_metrics or {}
                 user_lookup[u.id] = {
-                    "name":              u.name,
-                    "handle":            f"@{u.username}",
-                    "username":          u.username,
-                    "followers":         m.get("followers_count", 0),
-                    "following":         m.get("following_count", 0),
-                    "tweet_count":       m.get("tweet_count", 0),
+                    "name": u.name, "handle": f"@{u.username}", "username": u.username,
+                    "followers": m.get("followers_count", 0), "following": m.get("following_count", 0),
+                    "tweet_count": m.get("tweet_count", 0),
                     "profile_image_url": getattr(u, "profile_image_url", ""),
-                    "description":       getattr(u, "description", ""),
-                    "verified":          getattr(u, "verified", False),
+                    "description": getattr(u, "description", ""),
+                    "verified": getattr(u, "verified", False),
                 }
 
         for tweet in response.data:
             if tweet.id in seen_ids:
                 continue
             seen_ids.add(tweet.id)
-            parsed = parse_tweet(tweet.text)
-            if not parsed["symbol"] and not parsed["strike_price"]:
+            parsed = parse_text(tweet.text)
+            if not _is_useful(parsed):
                 continue
             author  = user_lookup.get(tweet.author_id, {})
             metrics = tweet.public_metrics or {}
             ca = tweet.created_at
             if ca and ca.tzinfo is None:
                 ca = ca.replace(tzinfo=timezone.utc)
-            rec = {
-                "id":         str(tweet.id),
-                "text":       tweet.text,
-                "tweet_url":  f"https://x.com/{author.get('username','i')}/status/{tweet.id}",
+            results.append({
+                "id": str(tweet.id), "text": tweet.text,
+                "tweet_url": f"https://x.com/{author.get('username','i')}/status/{tweet.id}",
                 "created_at": (ca or datetime.now(timezone.utc)).isoformat(),
                 **parsed,
-                "sentiment":  determine_sentiment(parsed.get("option_type")),
-                "likes":      metrics.get("like_count", 0),
-                "retweets":   metrics.get("retweet_count", 0),
-                "replies":    metrics.get("reply_count", 0),
-                "author":     author,
-            }
-            results.append(rec)
+                "sentiment": determine_sentiment(parsed.get("option_type")),
+                "likes": metrics.get("like_count", 0),
+                "retweets": metrics.get("retweet_count", 0),
+                "replies": metrics.get("reply_count", 0),
+                "author": author,
+            })
 
     logger.info("[Twitter API v2] Total parsed: %d", len(results))
     return results
@@ -542,34 +540,36 @@ def fetch_via_twitter_api(max_per_query: int = 30) -> list[dict]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def fetch_recommendations(max_results: int = 50) -> list[dict]:
+def fetch_recommendations(max_results: int = 60) -> list[dict]:
     """
-    Fetch option recommendations using best available method:
-      1. Twitter Guest Token API (free, no key needed)
-      2. ntscraper via Nitter (free, depends on Nitter uptime)
-      3. Twitter API v2 (paid Basic tier only)
-    Returns [] if all strategies fail — caller falls back to mock data.
+    Fetch option recommendations — tries each strategy in order:
+      1. StockTwits API  (free, no key)
+      2. Reddit JSON API (free, no key)
+      3. Twitter API v2  (paid — optional)
+    Returns [] if all fail; caller uses mock data.
     """
-    # Strategy 1: Guest Token (most reliable free method)
-    logger.info("Strategy 1: Twitter Guest Token API…")
-    data = fetch_via_guest_token(max_results)
+    # Strategy 1: StockTwits
+    logger.info("Strategy 1: StockTwits Public API…")
+    data = fetch_via_stocktwits(max_results)
     if data:
-        logger.info("Guest Token strategy succeeded: %d results.", len(data))
+        logger.info("StockTwits succeeded: %d results.", len(data))
         return data
 
-    # Strategy 2: ntscraper
-    logger.info("Strategy 2: ntscraper (Nitter)…")
-    data = fetch_via_ntscraper(max_results)
+    # Strategy 2: Reddit
+    logger.info("Strategy 2: Reddit Public JSON API…")
+    data = fetch_via_reddit(max_results)
     if data:
-        logger.info("ntscraper strategy succeeded: %d results.", len(data))
+        logger.info("Reddit succeeded: %d results.", len(data))
         return data
 
-    # Strategy 3: Twitter API v2
-    logger.info("Strategy 3: Twitter API v2…")
-    data = fetch_via_twitter_api(max_results)
-    if data:
-        logger.info("Twitter API v2 strategy succeeded: %d results.", len(data))
-        return data
+    # Strategy 3: Twitter API v2 (paid)
+    bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
+    if bearer and bearer != "your_bearer_token_here":
+        logger.info("Strategy 3: Twitter API v2…")
+        data = fetch_via_twitter_api(max_results)
+        if data:
+            logger.info("Twitter API v2 succeeded: %d results.", len(data))
+            return data
 
     logger.warning("All fetch strategies exhausted.")
     return []
@@ -580,118 +580,107 @@ def fetch_recommendations(max_results: int = 50) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def get_mock_data() -> list[dict]:
-    now_ist = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
     return [
         {
-            "id": "mock_001",
-            "text": "🔥 BANKNIFTY 51000 CE Buy @ 180-190\n🎯 Target: T1-240, T2-300\n🛑 SL: 140\nFor Today Intraday\n#BankNifty #NSE #optionstrading",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_001", "source": "demo",
+            "text": "🔥 BANKNIFTY 51000 CE Buy @ 180-190\n🎯 Target: T1-240, T2-300\n🛑 SL: 140\nFor Today Intraday\n#BankNifty #NSE",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "BANKNIFTY", "strike_price": "51000", "option_type": "CE",
             "buy_price": 185.0, "targets": [240.0, 300.0], "stop_loss": 140.0,
             "horizon": "today", "expiry": "08AUG", "sentiment": "BULLISH",
             "likes": 342, "retweets": 87, "replies": 23,
             "author": {"name": "NSE Options Guru", "handle": "@NSEOptionsGuru", "username": "NSEOptionsGuru",
                        "followers": 125430, "following": 870, "tweet_count": 18540,
-                       "profile_image_url": "", "description": "🇮🇳 SEBI Registered | Option Trader | 10+ yrs | NSE/BSE", "verified": True},
+                       "profile_image_url": "", "description": "SEBI Registered | Option Trader | NSE/BSE", "verified": True},
         },
         {
-            "id": "mock_002",
-            "text": "NIFTY 24500 PE Buy near 95-100\nTgt 140 / 175\nSL 70\nIntraday trade for today\n#NIFTY50 #OptionsTrading",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_002", "source": "demo",
+            "text": "NIFTY 24500 PE Buy near 95-100\nTgt 140 / 175\nSL 70\nIntraday for today\n#NIFTY50 #OptionsTrading",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "NIFTY", "strike_price": "24500", "option_type": "PE",
             "buy_price": 97.5, "targets": [140.0, 175.0], "stop_loss": 70.0,
             "horizon": "today", "expiry": "08AUG", "sentiment": "BEARISH",
             "likes": 189, "retweets": 45, "replies": 12,
             "author": {"name": "Rahul Option Trader", "handle": "@RahulOptionTrader", "username": "RahulOptionTrader",
                        "followers": 67200, "following": 1200, "tweet_count": 9800,
-                       "profile_image_url": "", "description": "Option buyer | Intraday & Positional | NSE certified", "verified": False},
+                       "profile_image_url": "", "description": "Intraday & Positional NSE trader", "verified": False},
         },
         {
-            "id": "mock_003",
-            "text": "📈 RELIANCE 3100 CE buy @55 for tomorrow\nT1: 80 T2: 110\nSL: 38\nPositional call\n#Reliance #NSE",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_003", "source": "demo",
+            "text": "📈 RELIANCE 3100 CE buy @55 for tomorrow\nT1: 80 T2: 110\nSL: 38\n#Reliance #NSE",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "RELIANCE", "strike_price": "3100", "option_type": "CE",
             "buy_price": 55.0, "targets": [80.0, 110.0], "stop_loss": 38.0,
             "horizon": "tomorrow", "expiry": "29AUG", "sentiment": "BULLISH",
             "likes": 521, "retweets": 134, "replies": 41,
             "author": {"name": "Stock Market India", "handle": "@StockMarketIndia", "username": "StockMarketIndia",
                        "followers": 312000, "following": 540, "tweet_count": 32100,
-                       "profile_image_url": "", "description": "Premium Stock & Option Tips | SEBI Reg RA", "verified": True},
+                       "profile_image_url": "", "description": "Premium Option Tips | SEBI Reg RA", "verified": True},
         },
         {
-            "id": "mock_004",
-            "text": "HDFCBANK 1700 PE @ 28 for tomorrow\nSL 20, Tgt 45/65\nSwing call\n#HDFCBANK #NSE",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_004", "source": "demo",
+            "text": "HDFCBANK 1700 PE @ 28 for tomorrow\nSL 20, Tgt 45/65\n#HDFCBANK #NSE",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "HDFCBANK", "strike_price": "1700", "option_type": "PE",
             "buy_price": 28.0, "targets": [45.0, 65.0], "stop_loss": 20.0,
             "horizon": "tomorrow", "expiry": "29AUG", "sentiment": "BEARISH",
             "likes": 98, "retweets": 22, "replies": 8,
             "author": {"name": "Priya Sharma Trading", "handle": "@PriyaSharmaTrading", "username": "PriyaSharmaTrading",
                        "followers": 44100, "following": 320, "tweet_count": 5600,
-                       "profile_image_url": "", "description": "Technical Analyst | Option Strategies | 7+ yrs NSE", "verified": False},
+                       "profile_image_url": "", "description": "Technical Analyst | 7+ yrs NSE", "verified": False},
         },
         {
-            "id": "mock_005",
-            "text": "Monthly swing: TATAMOTORS 900 CE @ 35\nExpiry 28SEP | T1 60 T2 90 T3 130\nSL 22\n#TataMotors #Swing",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_005", "source": "demo",
+            "text": "Monthly swing: TATAMOTORS 900 CE @ 35\nExpiry 28SEP | T1 60 T2 90\nSL 22\n#TataMotors #Swing",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "TATAMOTORS", "strike_price": "900", "option_type": "CE",
             "buy_price": 35.0, "targets": [60.0, 90.0], "stop_loss": 22.0,
             "horizon": "monthly", "expiry": "28SEP", "sentiment": "BULLISH",
             "likes": 734, "retweets": 201, "replies": 67,
             "author": {"name": "Vikram Option Expert", "handle": "@VikramOptionExpert", "username": "VikramOptionExpert",
                        "followers": 189500, "following": 680, "tweet_count": 24300,
-                       "profile_image_url": "", "description": "SEBI RA | Monthly swing trader | NIFTY BANKNIFTY specialist", "verified": True},
+                       "profile_image_url": "", "description": "SEBI RA | Monthly swing | NIFTY BANKNIFTY", "verified": True},
         },
         {
-            "id": "mock_006",
-            "text": "BANKNIFTY 51500 PE buying at 145\nSL 110, T1 185 T2 230\nFor today EOD trade\n#BankNifty #intraday",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_006", "source": "demo",
+            "text": "BANKNIFTY 51500 PE buying at 145\nSL 110, T1 185 T2 230\nToday EOD trade\n#BankNifty #intraday",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "BANKNIFTY", "strike_price": "51500", "option_type": "PE",
             "buy_price": 145.0, "targets": [185.0, 230.0], "stop_loss": 110.0,
             "horizon": "today", "expiry": "08AUG", "sentiment": "BEARISH",
             "likes": 267, "retweets": 58, "replies": 19,
             "author": {"name": "Amit Kapoor FnO", "handle": "@AmitKapoorFnO", "username": "AmitKapoorFnO",
                        "followers": 88700, "following": 980, "tweet_count": 14200,
-                       "profile_image_url": "", "description": "F&O Trader | BankNifty specialist | Daily intraday calls", "verified": False},
+                       "profile_image_url": "", "description": "F&O Trader | BankNifty specialist", "verified": False},
         },
         {
-            "id": "mock_007",
-            "text": "📊 INFY 1850 CE for Monthly swing\nBuy @ 42, Expiry 28AUG\nT1: 68 T2: 95\nSL: 28\n#Infosys #NSE",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_007", "source": "demo",
+            "text": "📊 INFY 1850 CE Monthly swing\nBuy @ 42, Expiry 28AUG\nT1: 68 T2: 95 SL: 28\n#Infosys #NSE",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "INFY", "strike_price": "1850", "option_type": "CE",
             "buy_price": 42.0, "targets": [68.0, 95.0], "stop_loss": 28.0,
             "horizon": "monthly", "expiry": "28AUG", "sentiment": "BULLISH",
             "likes": 412, "retweets": 93, "replies": 31,
             "author": {"name": "IT Sector Expert", "handle": "@ITSectorExpert", "username": "ITSectorExpert",
                        "followers": 55600, "following": 410, "tweet_count": 7900,
-                       "profile_image_url": "", "description": "IT & Tech sector analyst | NSE options", "verified": False},
+                       "profile_image_url": "", "description": "IT sector analyst | NSE options", "verified": False},
         },
         {
-            "id": "mock_008",
-            "text": "Positional for Tomorrow - NIFTY 24800 CE\nEntry: 65-70\nTarget: 100 / 140\nSL: 45\n#NIFTY #NSEOptions",
-            "tweet_url": "https://x.com/example",
-            "created_at": now_ist.isoformat(),
+            "id": "mock_008", "source": "demo",
+            "text": "Positional Tomorrow - NIFTY 24800 CE\nEntry: 65-70 Target: 100/140 SL: 45\n#NIFTY #NSEOptions",
+            "tweet_url": "https://x.com/example", "created_at": now.isoformat(),
             "symbol": "NIFTY", "strike_price": "24800", "option_type": "CE",
             "buy_price": 67.5, "targets": [100.0, 140.0], "stop_loss": 45.0,
             "horizon": "tomorrow", "expiry": "08AUG", "sentiment": "BULLISH",
             "likes": 156, "retweets": 38, "replies": 14,
             "author": {"name": "Nifty Positional Calls", "handle": "@NiftyPositional", "username": "NiftyPositional",
                        "followers": 38900, "following": 290, "tweet_count": 6100,
-                       "profile_image_url": "", "description": "Positional & swing option calls | Nifty & Bank Nifty", "verified": False},
+                       "profile_image_url": "", "description": "Positional option calls | Nifty & Bank Nifty", "verified": False},
         },
     ]
 
 
-# ---------------------------------------------------------------------------
-# Standalone test
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     data = fetch_recommendations()
     if not data:
