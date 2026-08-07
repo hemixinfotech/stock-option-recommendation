@@ -58,23 +58,19 @@ def _load_data(force: bool = False) -> list:
         )
 
         if force or cache_stale:
-            bearer = os.getenv("TWITTER_BEARER_TOKEN", "")
-            use_mock = not bearer or bearer == "your_bearer_token_here"
-
-            if use_mock:
-                logger.info("No Twitter credentials → using mock data")
+            # Always try live fetch first — ntscraper works without any API key.
+            # Twitter API v2 is attempted as a secondary if ntscraper returns nothing.
+            # Mock data is used only as the final fallback.
+            logger.info("Fetching live recommendations (ntscraper → Twitter API → mock)…")
+            fetched = fetch_recommendations()
+            if fetched:
+                _CACHE["data"] = fetched
+                _CACHE["is_mock"] = False
+                logger.info("Live data loaded: %d recommendations.", len(fetched))
+            else:
+                logger.warning("All live sources returned no data — using mock data.")
                 _CACHE["data"] = get_mock_data()
                 _CACHE["is_mock"] = True
-            else:
-                logger.info("Refreshing from Twitter API…")
-                fetched = fetch_recommendations()
-                if fetched:
-                    _CACHE["data"] = fetched
-                    _CACHE["is_mock"] = False
-                else:
-                    logger.warning("Twitter returned no data; falling back to mock")
-                    _CACHE["data"] = get_mock_data()
-                    _CACHE["is_mock"] = True
 
             _CACHE["last_updated"] = now
 
