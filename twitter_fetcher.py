@@ -87,8 +87,60 @@ TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|eod)\b", r
 TOMORROW_KEYWORDS = re.compile(r"\b(tomorrow|tmrw|next\s*day|positional\s*day)\b", re.IGNORECASE)
 MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|monthly\s*expiry|swing)\b", re.IGNORECASE)
 WEEKLY_KEYWORDS   = re.compile(r"\b(weekly|week\s*expiry|this\s*week|weekly\s*expiry)\b", re.IGNORECASE)
-BTST_KEYWORDS     = re.compile(r"\b(BTST|buy\s*today\s*sell\s*tomorrow|positional\s*call|overnight\s*call|overnight\s*trade)\b", re.IGNORECASE)
-STOCK_REPORT_KEYWORDS = re.compile(r"\b(stock\s*report|analysis|fundamental|results?\s*preview|quarterly\s*result|earnings?\s*report|technical\s*report|research\s*report|sector\s*report)\b", re.IGNORECASE)
+BTST_KEYWORDS = re.compile(
+    r"\b("
+    # Explicit BTST mentions
+    r"BTST|buy\s*today\s*sell\s*tomorrow|B2ST|"
+    # Overnight / next-day holds
+    r"overnight\s*(?:call|trade|position|buy|pick|idea)|"
+    r"hold\s*overnight|carry\s*forward|carry\s*trade|"
+    # Positional short-term
+    r"positional\s*(?:call|trade|buy|pick|idea|tip)|"
+    r"short\s*term\s*(?:call|trade|buy|pick)|"
+    r"1[-\s]?day\s*(?:trade|call|pick)|"
+    # Common BTST phrasing
+    r"tomorrow\s*(?:trade|open|target|sell)|"
+    r"sell\s*(?:on\s*)?(?:tomorrow|tmrw)\s*open|"
+    r"gap\s*up\s*(?:play|trade|call|open)|"
+    r"gap\s*down\s*(?:play|trade|call)|"
+    r"next\s*day\s*(?:trade|call|open|sell)"
+    r")\b",
+    re.IGNORECASE,
+)
+STOCK_REPORT_KEYWORDS = re.compile(
+    r"\b("
+    # Explicit report types
+    r"stock\s*report|research\s*report|technical\s*report|sector\s*report|"
+    r"fundamental\s*(?:report|analysis|view|call)|"
+    # Analysis / study
+    r"(?:stock|company|sector|market)\s*analysis|"
+    r"deep\s*dive|due\s*diligence|DD\b|"
+    # Results & earnings
+    r"results?\s*(?:preview|update|review|analysis|today|out)|"
+    r"quarterly\s*(?:result|earnings?|numbers?|update)|"
+    r"Q[1-4]\s*(?:FY)?\d{0,4}\s*(?:results?|earnings?|preview|review)|"
+    r"earnings?\s*(?:report|preview|update|call|season)|"
+    r"annual\s*(?:report|result)|"
+    r"revenue\s*(?:estimate|growth|miss|beat)|"
+    r"PAT|EBITDA|EPS\s*(?:estimate|beat|miss)|"
+    # Fundamental terms
+    r"PE\s*ratio|price\s*to\s*(?:book|earnings)|"
+    r"valuation\s*(?:report|analysis|call)|"
+    r"fundamentally\s*(?:strong|weak|good)|"
+    r"(?:debt\s*free|zero\s*debt|cash\s*rich)|"
+    r"promoter\s*(?:holding|buying|pledge)|"
+    r"FII|DII\s*(?:buying|selling|data|activity)|"
+    # Technical research
+    r"technical\s*(?:analysis|view|setup|breakout|breakdown)|"
+    r"chart\s*(?:analysis|pattern|setup|study)|"
+    r"long\s*term\s*(?:buy|invest|hold|pick|call|view)|"
+    r"multibagger|wealth\s*creator|"
+    # Watchlist / coverage initiations
+    r"initiating\s*coverage|adding\s*to\s*(?:watchlist|portfolio)|"
+    r"screener|stock\s*(?:idea|pick|recommendation|reco)"
+    r")\b",
+    re.IGNORECASE,
+)
 EXPIRY_PATTERN    = re.compile(
     r"\b(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2})?)\b",
     re.IGNORECASE,
