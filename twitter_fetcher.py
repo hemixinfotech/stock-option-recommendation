@@ -87,6 +87,8 @@ TODAY_KEYWORDS    = re.compile(r"\b(today|intraday|day\s*trade|dtrade|eod)\b", r
 TOMORROW_KEYWORDS = re.compile(r"\b(tomorrow|tmrw|next\s*day|positional\s*day)\b", re.IGNORECASE)
 MONTHLY_KEYWORDS  = re.compile(r"\b(monthly|this\s*month|monthly\s*expiry|swing)\b", re.IGNORECASE)
 WEEKLY_KEYWORDS   = re.compile(r"\b(weekly|week\s*expiry|this\s*week|weekly\s*expiry)\b", re.IGNORECASE)
+BTST_KEYWORDS     = re.compile(r"\b(BTST|buy\s*today\s*sell\s*tomorrow|positional\s*call|overnight\s*call|overnight\s*trade)\b", re.IGNORECASE)
+STOCK_REPORT_KEYWORDS = re.compile(r"\b(stock\s*report|analysis|fundamental|results?\s*preview|quarterly\s*result|earnings?\s*report|technical\s*report|research\s*report|sector\s*report)\b", re.IGNORECASE)
 EXPIRY_PATTERN    = re.compile(
     r"\b(\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2})?)\b",
     re.IGNORECASE,
@@ -134,12 +136,20 @@ def parse_text(text: str) -> dict:
     else: horizon = "monthly" if EXPIRY_PATTERN.search(text_upper) else "today"
     expiry_m = EXPIRY_PATTERN.search(text_upper)
 
-    # Determine instrument type: index or stock
+    # Determine instrument type: index, stock, btst, or stock_report
     symbol_upper = (symbol or "").upper()
-    instrument_type = "index" if symbol_upper in INDEX_SYMBOLS else "stock"
 
-    # Determine expiry type for index options
-    if instrument_type == "index":
+    # Check for BTST first
+    if BTST_KEYWORDS.search(text):
+        instrument_type = "btst"
+        expiry_type = None
+    # Check for stock report
+    elif STOCK_REPORT_KEYWORDS.search(text) and not OPTION_TYPE_PATTERN.search(text):
+        instrument_type = "stock_report"
+        expiry_type = None
+    elif symbol_upper in INDEX_SYMBOLS:
+        instrument_type = "index"
+        # Determine expiry type for index options
         if WEEKLY_KEYWORDS.search(text) or (horizon in ("today", "tomorrow")):
             expiry_type = "weekly"
         elif MONTHLY_KEYWORDS.search(text) or horizon == "monthly":
@@ -147,6 +157,7 @@ def parse_text(text: str) -> dict:
         else:
             expiry_type = "weekly"  # default for index: weekly
     else:
+        instrument_type = "stock"
         expiry_type = None
 
     return {
@@ -336,8 +347,12 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
             if RT_PATTERN.match(text) or not _is_option_post(text):
                 continue
 
+            u = tw.user
+            # Filter: only profiles with >= 20K followers
+            if (u.followersCount or 0) < 20000:
+                continue
+
             parsed = parse_text(text)
-            u      = tw.user
 
             results.append({
                 "id":         tweet_id,
@@ -568,7 +583,7 @@ def get_mock_data() -> list[dict]:
         {"id":"mock_009","source":"demo","text":"MIDCPNIFTY 13500 PE Intraday SL 55 TGT 85/110\n#MidcapNifty #NSE",
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
          "symbol":"MIDCPNIFTY","strike_price":"13500","option_type":"PE","buy_price":68.0,"targets":[85.0,110.0],"stop_loss":55.0,"horizon":"today","expiry":"08AUG","sentiment":"BEARISH","likes":74,"retweets":15,"replies":5,"instrument_type":"index","expiry_type":"weekly",
-         "author":_a("MidcapNifty Expert","MidcapNiftyExpert",18500,"MidCap & SmallCap NSE options")},
+         "author":_a("MidcapNifty Expert","MidcapNiftyExpert",22500,"MidCap & SmallCap NSE options")},
 
         # ── RELIANCE ───────────────────────────────────────────────
         {"id":"mock_010","source":"demo","text":"📈 RELIANCE 3100 CE buy @55 for tomorrow\nT1:80 T2:110 SL:38\n#Reliance #NSE",
@@ -766,6 +781,68 @@ def get_mock_data() -> list[dict]:
          "tweet_url":"https://x.com/example","created_at":now.isoformat(),
          "symbol":"HEROMOTOCO","strike_price":"5500","option_type":"CE","buy_price":108.0,"targets":[158.0,208.0],"stop_loss":78.0,"horizon":"monthly","expiry":"28SEP","sentiment":"BULLISH","likes":145,"retweets":33,"replies":11,"instrument_type":"stock","expiry_type":None,
          "author":_a("Stock Market India","StockMarketIndia",312000,"Premium Option Tips",True)},
+
+        # ── BTST CALLS ─────────────────────────────────────────
+        {"id":"mock_046","source":"demo","text":"🌙 BTST Call: TATAMOTORS 920 CE Buy @42\n🎯 TGT T1:65 T2:90 SL:28\n⏳ Hold overnight for tomorrow\n#BTST #TataMotors",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"TATAMOTORS","strike_price":"920","option_type":"CE","buy_price":42.0,"targets":[65.0,90.0],"stop_loss":28.0,"horizon":"tomorrow","expiry":"15AUG","sentiment":"BULLISH","likes":678,"retweets":188,"replies":55,"instrument_type":"btst","expiry_type":None,
+         "author":_a("Stock Market India","StockMarketIndia",312000,"Premium Option Tips | SEBI Reg RA",True)},
+
+        {"id":"mock_047","source":"demo","text":"🌙 BTST: RELIANCE 3120 CE @ 58 for overnight position\n🎯 TGT 85/115 🛑 SL 38\nPositional Call overnight trade\n#BTST #Reliance",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"RELIANCE","strike_price":"3120","option_type":"CE","buy_price":58.0,"targets":[85.0,115.0],"stop_loss":38.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BULLISH","likes":512,"retweets":141,"replies":48,"instrument_type":"btst","expiry_type":None,
+         "author":_a("Vikram Option Expert","VikramOptionExpert",189500,"SEBI RA | NIFTY BANKNIFTY swing trader",True)},
+
+        {"id":"mock_048","source":"demo","text":"🌙 Overnight Call: HDFCBANK 1720 PE @32 BTST\nSL 22 TGT 52/72\nBuy today sell tomorrow\n#BTST #HDFCBank",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"HDFCBANK","strike_price":"1720","option_type":"PE","buy_price":32.0,"targets":[52.0,72.0],"stop_loss":22.0,"horizon":"tomorrow","expiry":"29AUG","sentiment":"BEARISH","likes":389,"retweets":102,"replies":34,"instrument_type":"btst","expiry_type":None,
+         "author":_a("NSE Options Guru","NSEOptionsGuru",125430,"SEBI Registered | Option Trader | NSE/BSE",True)},
+
+        {"id":"mock_049","source":"demo","text":"🌙 BTST Positional Call: ICICIBANK 1310 CE @40\nSL 28 T1:62 T2:82\nOvernight trade buy today sell tomorrow\n#BTST #ICICIBank",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"ICICIBANK","strike_price":"1310","option_type":"CE","buy_price":40.0,"targets":[62.0,82.0],"stop_loss":28.0,"horizon":"tomorrow","expiry":"15AUG","sentiment":"BULLISH","likes":445,"retweets":118,"replies":39,"instrument_type":"btst","expiry_type":None,
+         "author":_a("Rahul Option Trader","RahulOptionTrader",67200,"Intraday & Positional NSE trader")},
+
+        {"id":"mock_050","source":"demo","text":"🌙 BTST: ZOMATO 295 CE @14 overnight\nSL 9 TGT 22/32\nBTST positional call\n#BTST #Zomato #NewAge",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"ZOMATO","strike_price":"295","option_type":"CE","buy_price":14.0,"targets":[22.0,32.0],"stop_loss":9.0,"horizon":"tomorrow","expiry":"15AUG","sentiment":"BULLISH","likes":334,"retweets":88,"replies":29,"instrument_type":"btst","expiry_type":None,
+         "author":_a("Amit Kapoor FnO","AmitKapoorFnO",88700,"F&O Trader | BankNifty specialist")},
+
+        {"id":"mock_051","source":"demo","text":"🌙 BTST Alert: BANKNIFTY 51200 PE @165\n Overnight positional call SL 125 TGT 215/270\n#BTST #BankNifty",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"BANKNIFTY","strike_price":"51200","option_type":"PE","buy_price":165.0,"targets":[215.0,270.0],"stop_loss":125.0,"horizon":"tomorrow","expiry":"15AUG","sentiment":"BEARISH","likes":589,"retweets":155,"replies":52,"instrument_type":"btst","expiry_type":None,
+         "author":_a("Stock Market India","StockMarketIndia",312000,"Premium Option Tips | SEBI Reg RA",True)},
+
+        # ── STOCK REPORTS ───────────────────────────────────
+        {"id":"mock_052","source":"demo","text":"📋 Technical Report: RELIANCE\n⬆️ Strong breakout above 3080. Targets: 3150/3220. Support at 3020.\nFundamental analysis: EV push + Jio growth driving upside.\n#Reliance #StockReport #TechnicalAnalysis",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"RELIANCE","strike_price":None,"option_type":None,"buy_price":3080.0,"targets":[3150.0,3220.0],"stop_loss":3020.0,"horizon":"monthly","expiry":None,"sentiment":"BULLISH","likes":1205,"retweets":387,"replies":142,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("Stock Market India","StockMarketIndia",312000,"Premium Option Tips | SEBI Reg RA",True)},
+
+        {"id":"mock_053","source":"demo","text":"📋 Quarterly Results Preview: TCS Q1FY26\n📊 Revenue estimate: $7.2B | EPS est: ₹64\nTechnical: Cup & Handle breakout above 4180. Target 4350/4500.\n#TCS #EarningsReport #IT",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"TCS","strike_price":None,"option_type":None,"buy_price":4180.0,"targets":[4350.0,4500.0],"stop_loss":4050.0,"horizon":"monthly","expiry":None,"sentiment":"BULLISH","likes":932,"retweets":276,"replies":98,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("IT Sector Expert","ITSectorExpert",55600,"IT sector analyst | NSE options")},
+
+        {"id":"mock_054","source":"demo","text":"📋 Research Report: HDFCBANK Analysis\n🔵 NIM pressure, but credit growth solid at 16% YoY.\nTechnical: Consolidating near 1680 support. Breakout above 1720 targets 1800+.\n#HDFCBANK #BankingReport #Fundamental",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"HDFCBANK","strike_price":None,"option_type":None,"buy_price":1680.0,"targets":[1720.0,1800.0],"stop_loss":1640.0,"horizon":"monthly","expiry":None,"sentiment":"BULLISH","likes":789,"retweets":212,"replies":76,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("Vikram Option Expert","VikramOptionExpert",189500,"SEBI RA | Research & Analysis",True)},
+
+        {"id":"mock_055","source":"demo","text":"📋 Sector Report: Auto Sector Outlook\n🚗 TATAMOTORS, MARUTI, HEROMOTOCO leading the pack.\nEV adoption up 35% QoQ. TATAMOTORS: Target 980 | MARUTI: Target 13500.\n#AutoSector #SectorReport #NSE",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"TATAMOTORS","strike_price":None,"option_type":None,"buy_price":920.0,"targets":[980.0,1050.0],"stop_loss":870.0,"horizon":"monthly","expiry":None,"sentiment":"BULLISH","likes":1456,"retweets":423,"replies":167,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("NSE Options Guru","NSEOptionsGuru",125430,"SEBI Registered | Research & Option Analyst",True)},
+
+        {"id":"mock_056","source":"demo","text":"📋 Stock Analysis: INFY Q1 Results Preview\nRevenue expected ₹38,200Cr (+11% YoY). Attrition falling - margin expansion likely.\nTechnical Report: Strong support at 1820. Target 1950/2050.\n#Infosys #ResearchReport",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"INFY","strike_price":None,"option_type":None,"buy_price":1820.0,"targets":[1950.0,2050.0],"stop_loss":1780.0,"horizon":"monthly","expiry":None,"sentiment":"BULLISH","likes":678,"retweets":189,"replies":64,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("IT Sector Expert","ITSectorExpert",55600,"IT sector analyst | NSE options")},
+
+        {"id":"mock_057","source":"demo","text":"📋 Bearish Report: BAJFINANCE Analysis\n🔴 Valuations stretched at 35x FY26E. Credit cost rising.\nFundamental concern + Technical breakdown below 7800 targets 7400/7100.\n#BajajFinance #StockReport",
+         "tweet_url":"https://x.com/example","created_at":now.isoformat(),
+         "symbol":"BAJFINANCE","strike_price":None,"option_type":None,"buy_price":7800.0,"targets":[7400.0,7100.0],"stop_loss":8100.0,"horizon":"monthly","expiry":None,"sentiment":"BEARISH","likes":934,"retweets":261,"replies":89,"instrument_type":"stock_report","expiry_type":None,
+         "author":_a("Stock Market India","StockMarketIndia",312000,"Premium Analysis | SEBI Reg RA",True)},
     ]
 
 

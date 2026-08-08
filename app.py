@@ -7,7 +7,8 @@ Serves the web UI and provides REST API endpoints.
 Endpoints:
   GET /                     → Main dashboard UI
   GET /api/recommendations  → All recommendations (JSON)
-  GET /api/recommendations?horizon=today|tomorrow|monthly
+  GET /api/recommendations?instrument_type=index|stock|btst|stock_report
+  GET /api/recommendations?min_followers=20000
   GET /api/refresh          → Force refresh from Twitter API
   GET /api/stats            → Summary statistics
 """
@@ -84,13 +85,16 @@ def _do_refresh() -> None:
         _CACHE["last_updated"] = datetime.now(timezone.utc)
 
 
-def _filter_data(data: list, horizon: Optional[str], instrument_type: Optional[str] = None, expiry_type: Optional[str] = None) -> list:
+def _filter_data(data: list, horizon: Optional[str], instrument_type: Optional[str] = None,
+                 expiry_type: Optional[str] = None, min_followers: int = 0) -> list:
     if horizon and horizon in ("today", "tomorrow", "monthly"):
         data = [r for r in data if r.get("horizon") == horizon]
-    if instrument_type and instrument_type in ("index", "stock"):
+    if instrument_type and instrument_type in ("index", "stock", "btst", "stock_report"):
         data = [r for r in data if r.get("instrument_type") == instrument_type]
     if expiry_type and expiry_type in ("weekly", "monthly"):
         data = [r for r in data if r.get("expiry_type") == expiry_type]
+    if min_followers > 0:
+        data = [r for r in data if (r.get("author") or {}).get("followers", 0) >= min_followers]
     return data
 
 
@@ -135,9 +139,10 @@ def api_recommendations():
     search          = request.args.get("q", "").strip().upper()
     instrument_type = request.args.get("instrument_type")
     expiry_type     = request.args.get("expiry_type")
+    min_followers   = int(request.args.get("min_followers", 0))
 
     data = _get_data()
-    data = _filter_data(data, horizon, instrument_type, expiry_type)
+    data = _filter_data(data, horizon, instrument_type, expiry_type, min_followers)
 
     if search:
         data = [
@@ -178,15 +183,21 @@ def api_refresh():
 
 @app.route("/api/stats")
 def api_stats():
+    min_followers = int(request.args.get("min_followers", 0))
     data = _get_data()
-    today_cnt     = sum(1 for r in data if r.get("horizon") == "today")
-    tomorrow_cnt  = sum(1 for r in data if r.get("horizon") == "tomorrow")
-    monthly_cnt   = sum(1 for r in data if r.get("horizon") == "monthly")
-    bullish_cnt   = sum(1 for r in data if r.get("sentiment") == "BULLISH")
-    bearish_cnt   = sum(1 for r in data if r.get("sentiment") == "BEARISH")
-    index_cnt     = sum(1 for r in data if r.get("instrument_type") == "index")
-    stock_cnt     = sum(1 for r in data if r.get("instrument_type") == "stock")
-    weekly_cnt    = sum(1 for r in data if r.get("expiry_type") == "weekly")
+    if min_followers > 0:
+        data = [r for r in data if (r.get("author") or {}).get("followers", 0) >= min_followers]
+
+    today_cnt       = sum(1 for r in data if r.get("horizon") == "today")
+    tomorrow_cnt    = sum(1 for r in data if r.get("horizon") == "tomorrow")
+    monthly_cnt     = sum(1 for r in data if r.get("horizon") == "monthly")
+    bullish_cnt     = sum(1 for r in data if r.get("sentiment") == "BULLISH")
+    bearish_cnt     = sum(1 for r in data if r.get("sentiment") == "BEARISH")
+    index_cnt       = sum(1 for r in data if r.get("instrument_type") == "index")
+    stock_cnt       = sum(1 for r in data if r.get("instrument_type") == "stock")
+    btst_cnt        = sum(1 for r in data if r.get("instrument_type") == "btst")
+    report_cnt      = sum(1 for r in data if r.get("instrument_type") == "stock_report")
+    weekly_cnt      = sum(1 for r in data if r.get("expiry_type") == "weekly")
     monthly_exp_cnt = sum(1 for r in data if r.get("expiry_type") == "monthly")
 
     top_authors = {}
@@ -220,6 +231,8 @@ def api_stats():
         "bearish": bearish_cnt,
         "index_count": index_cnt,
         "stock_count": stock_cnt,
+        "btst_count": btst_cnt,
+        "report_count": report_cnt,
         "weekly_count": weekly_cnt,
         "monthly_expiry_count": monthly_exp_cnt,
         "top_authors": top_authors_list,

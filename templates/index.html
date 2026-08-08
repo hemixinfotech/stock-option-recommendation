@@ -247,7 +247,7 @@
     /* Stats overview */
     .stats-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
       gap: 10px;
     }
 
@@ -281,10 +281,11 @@
       letter-spacing: 0.8px;
     }
 
-    .stat-card.today  .stat-value { color: var(--accent-blue); }
-    .stat-card.tmrow  .stat-value { color: var(--accent-purple); }
-    .stat-card.monthly .stat-value { color: var(--accent-cyan); }
-    .stat-card.total   .stat-value { color: var(--text-primary); }
+    .stat-card.index-opt  .stat-value { color: var(--accent-blue); }
+    .stat-card.stock-opt  .stat-value { color: var(--accent-purple); }
+    .stat-card.btst-opt   .stat-value { color: var(--accent-orange); }
+    .stat-card.report-opt .stat-value { color: var(--accent-cyan); }
+    .stat-card.total       .stat-value { color: var(--text-primary); }
 
     /* Sentiment bar */
     .sentiment-section { }
@@ -505,6 +506,30 @@
     .instr-tab.stock-tab .instr-tab-count {
       background: rgba(139,92,246,0.15);
       color: var(--accent-purple);
+    }
+
+    .instr-tab.btst-tab .instr-tab-count {
+      background: rgba(245,158,11,0.15);
+      color: var(--accent-orange);
+    }
+
+    .instr-tab.report-tab .instr-tab-count {
+      background: rgba(6,182,212,0.15);
+      color: var(--accent-cyan);
+    }
+
+    .follower-filter-note {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: rgba(245,158,11,0.08);
+      border: 1px solid rgba(245,158,11,0.25);
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-orange);
+      white-space: nowrap;
     }
 
     /* ── Index expiry sub-tabs ── */
@@ -1093,6 +1118,18 @@
       border: 1px solid rgba(139,92,246,0.3);
     }
 
+    .instrument-badge.btst {
+      background: rgba(245,158,11,0.15);
+      color: var(--accent-orange);
+      border: 1px solid rgba(245,158,11,0.3);
+    }
+
+    .instrument-badge.stock_report {
+      background: rgba(6,182,212,0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6,182,212,0.3);
+    }
+
     /* =========================================================
        Loading / Empty states
     ========================================================= */
@@ -1174,7 +1211,7 @@
         border-right: none;
         border-bottom: 1px solid var(--border);
       }
-      .stats-grid { grid-template-columns: repeat(4, 1fr); }
+      .stats-grid { grid-template-columns: repeat(5, 1fr); }
       .analysts-list { flex-direction: row; overflow-x: auto; }
       .analyst-mini-card { flex-shrink: 0; width: 200px; }
     }
@@ -1236,17 +1273,21 @@
             <div class="stat-value" id="statTotal">—</div>
             <div class="stat-label">Total</div>
           </div>
-          <div class="stat-card today">
-            <div class="stat-value" id="statToday">—</div>
-            <div class="stat-label">Today</div>
+          <div class="stat-card index-opt">
+            <div class="stat-value" id="statIndex">—</div>
+            <div class="stat-label">Index</div>
           </div>
-          <div class="stat-card tmrow">
-            <div class="stat-value" id="statTomorrow">—</div>
-            <div class="stat-label">Tomorrow</div>
+          <div class="stat-card stock-opt">
+            <div class="stat-value" id="statStock">—</div>
+            <div class="stat-label">Stock Opt.</div>
           </div>
-          <div class="stat-card monthly">
-            <div class="stat-value" id="statMonthly">—</div>
-            <div class="stat-label">Monthly</div>
+          <div class="stat-card btst-opt">
+            <div class="stat-value" id="statBtst">—</div>
+            <div class="stat-label">BTST</div>
+          </div>
+          <div class="stat-card report-opt">
+            <div class="stat-value" id="statReport">—</div>
+            <div class="stat-label">Reports</div>
           </div>
         </div>
       </div>
@@ -1298,7 +1339,7 @@
       <!-- ── Instrument type top-level tabs ── -->
       <div class="instrument-tabs-wrap">
         <button class="instr-tab active" id="instrAll" onclick="setInstrumentType(null, this)">
-          📊 All Options
+          📊 All
           <span class="instr-tab-count" id="instrAllCount">—</span>
         </button>
         <button class="instr-tab" id="instrIndex" onclick="setInstrumentType('index', this)">
@@ -1308,6 +1349,14 @@
         <button class="instr-tab stock-tab" id="instrStock" onclick="setInstrumentType('stock', this)">
           📈 Stock Options
           <span class="instr-tab-count" id="instrStockCount">—</span>
+        </button>
+        <button class="instr-tab btst-tab" id="instrBtst" onclick="setInstrumentType('btst', this)">
+          🌙 BTST Call
+          <span class="instr-tab-count" id="instrBtstCount">—</span>
+        </button>
+        <button class="instr-tab report-tab" id="instrReport" onclick="setInstrumentType('stock_report', this)">
+          📋 Stock Report
+          <span class="instr-tab-count" id="instrReportCount">—</span>
         </button>
       </div>
 
@@ -1321,11 +1370,8 @@
 
       <!-- Filter bar -->
       <div class="filter-bar">
-        <div class="horizon-tabs">
-          <button class="tab-btn active" id="tabAll"      onclick="setHorizon(null,    this)">All</button>
-          <button class="tab-btn"        id="tabToday"    onclick="setHorizon('today', this)">📅 Today</button>
-          <button class="tab-btn"        id="tabTomorrow" onclick="setHorizon('tomorrow', this)">⏭ Tomorrow</button>
-          <button class="tab-btn"        id="tabMonthly"  onclick="setHorizon('monthly', this)">📆 Monthly</button>
+        <div class="follower-filter-note">
+          👥 20K+ Followers Only
         </div>
 
         <div class="search-wrap">
@@ -1362,11 +1408,11 @@
 
   <!-- ===================== JAVASCRIPT ===================== -->
   <script>
-    let currentHorizon        = null;
     let currentInstrumentType = null;
     let currentExpiryType     = null;
     let searchTimeout  = null;
     let allStats       = null;
+    const MIN_FOLLOWERS = 20000;
 
     // ── Utilities ──────────────────────────────────────────
 
@@ -1405,19 +1451,22 @@
 
     async function loadStats() {
       try {
-        const res  = await fetch('/api/stats');
+        const res  = await fetch('/api/stats?min_followers=20000');
         const data = await res.json();
         allStats = data;
 
-        document.getElementById('statTotal').textContent    = data.total || 0;
-        document.getElementById('statToday').textContent    = data.today || 0;
-        document.getElementById('statTomorrow').textContent = data.tomorrow || 0;
-        document.getElementById('statMonthly').textContent  = data.monthly || 0;
+        document.getElementById('statTotal').textContent  = data.total || 0;
+        document.getElementById('statIndex').textContent  = data.index_count || 0;
+        document.getElementById('statStock').textContent  = data.stock_count || 0;
+        document.getElementById('statBtst').textContent   = data.btst_count || 0;
+        document.getElementById('statReport').textContent = data.report_count || 0;
 
         // Update instrument tab counts
-        document.getElementById('instrAllCount').textContent   = data.total || 0;
-        document.getElementById('instrIndexCount').textContent = data.index_count || 0;
-        document.getElementById('instrStockCount').textContent = data.stock_count || 0;
+        document.getElementById('instrAllCount').textContent    = data.total || 0;
+        document.getElementById('instrIndexCount').textContent  = data.index_count || 0;
+        document.getElementById('instrStockCount').textContent  = data.stock_count || 0;
+        document.getElementById('instrBtstCount').textContent   = data.btst_count || 0;
+        document.getElementById('instrReportCount').textContent = data.report_count || 0;
 
         const total = (data.bullish || 0) + (data.bearish || 0);
         const pct   = total > 0 ? Math.round((data.bullish / total) * 100) : 50;
@@ -1443,16 +1492,15 @@
     }
 
     async function loadRecommendations() {
-      const horizon = currentHorizon;
-      const sort    = document.getElementById('sortSelect').value;
-      const q       = document.getElementById('searchInput').value.trim();
+      const sort = document.getElementById('sortSelect').value;
+      const q    = document.getElementById('searchInput').value.trim();
 
       const params = new URLSearchParams();
-      if (horizon)         params.set('horizon', horizon);
       if (sort)            params.set('sort', sort);
       if (q)               params.set('q', q);
       if (currentInstrumentType) params.set('instrument_type', currentInstrumentType);
       if (currentExpiryType)     params.set('expiry_type', currentExpiryType);
+      params.set('min_followers', MIN_FOLLOWERS);
 
       document.getElementById('cardsArea').innerHTML =
         '<div class="loading-state"><div class="loading-spinner"></div><div>Loading…</div></div>';
@@ -1549,6 +1597,14 @@
       const horizonLabel = { today: 'Today', tomorrow: 'Tomorrow', monthly: 'Monthly' }[rec.horizon] || 'Unspecified';
       const author = rec.author || {};
 
+      // Instrument type badge label and class
+      const instrType = rec.instrument_type || 'stock';
+      const instrBadgeLabel = instrType === 'index' ? 'INDEX'
+        : instrType === 'btst' ? '🌙 BTST'
+        : instrType === 'stock_report' ? '📋 REPORT'
+        : 'STOCK';
+      const instrBadgeClass = instrType;
+
       const buyDisp = rec.buy_price ? '₹' + fmt(rec.buy_price) : null;
       const slDisp  = rec.stop_loss ? '₹' + fmt(rec.stop_loss) : null;
       const t1Disp  = rec.targets && rec.targets[0] ? '₹' + fmt(rec.targets[0]) : null;
@@ -1576,7 +1632,7 @@
               <div class="symbol-badge ${symClass}">${escHtml(rec.symbol || '?')}</div>
               ${opt ? `<span class="option-pill ${symClass}">${opt === 'CE' ? '📈 CE' : '📉 PE'}</span>` : ''}
               ${rec.strike_price ? `<span class="strike-label">${rec.strike_price} Strike</span>` : ''}
-              <span class="instrument-badge ${rec.instrument_type || 'stock'}">${isIndex ? 'INDEX' : 'STOCK'}</span>
+              <span class="instrument-badge ${instrBadgeClass}">${instrBadgeLabel}</span>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
               <span class="horizon-pill ${rec.horizon}">${horizonLabel}</span>
@@ -1658,12 +1714,6 @@
 
     // ── Controls ────────────────────────────────────────────
 
-    function setHorizon(horizon, btn) {
-      currentHorizon = horizon;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      loadRecommendations();
-    }
 
     function setInstrumentType(type, btn) {
       currentInstrumentType = type;
@@ -1672,11 +1722,10 @@
       document.querySelectorAll('.instr-tab').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      // Show/hide expiry sub-tabs
+      // Show/hide expiry sub-tabs (only for index)
       const subtabs = document.getElementById('expirySubtabs');
       if (type === 'index') {
         subtabs.classList.add('visible');
-        // Reset sub-tab active state
         document.querySelectorAll('.expiry-tab').forEach(b => b.classList.remove('active'));
         document.getElementById('expiryAll').classList.add('active');
       } else {
