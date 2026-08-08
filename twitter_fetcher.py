@@ -218,15 +218,23 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
     """
     Async core for twscrape.
 
-    Authentication priority:
+    Authentication priority (per account):
       1. Cookies: TWITTER_AUTH_TOKEN + TWITTER_CT0  ← bypasses Cloudflare (RECOMMENDED)
       2. Username + Password fallback
+
+    Account 1 env vars:
+      TWITTER_USERNAME, TWITTER_PASSWORD, TWITTER_EMAIL,
+      TWITTER_EMAIL_PASSWORD, TWITTER_AUTH_TOKEN, TWITTER_CT0
+
+    Account 2 env vars (optional, used when account 1 is rate-limited):
+      TWITTER_USERNAME_2, TWITTER_PASSWORD_2, TWITTER_EMAIL_2,
+      TWITTER_EMAIL_PASSWORD_2, TWITTER_AUTH_TOKEN_2, TWITTER_CT0_2
 
     How to get cookies:
       1. Open x.com in Chrome, log in
       2. Press F12 → Application tab → Cookies → https://x.com
       3. Copy value of 'auth_token' and 'ct0'
-      4. Set as TWITTER_AUTH_TOKEN and TWITTER_CT0 in Railway Variables
+      4. Set as TWITTER_AUTH_TOKEN / TWITTER_CT0 (and _2 for second account)
     """
     try:
         from twscrape import API, gather
@@ -234,105 +242,139 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
         logger.warning("[twscrape] Not installed. Run: pip install twscrape")
         return []
 
-    username       = os.getenv("TWITTER_USERNAME", "")
-    password       = os.getenv("TWITTER_PASSWORD", "")
-    email          = os.getenv("TWITTER_EMAIL", "")
-    email_password = os.getenv("TWITTER_EMAIL_PASSWORD", password)
-    auth_token     = os.getenv("TWITTER_AUTH_TOKEN", "")   # cookie value
-    ct0            = os.getenv("TWITTER_CT0", "")           # cookie value
-
-    if not username:
-        logger.warning("[twscrape] TWITTER_USERNAME not set.")
-        return []
-
     api = API(_TWSCRAPE_DB)
 
-    try:
-        accounts = await api.pool.get_all()
-        existing = {a.username.lower(): a for a in accounts}
+    # ── Account registration helper ──────────────────────────────────────────
+    async def _register_account(suffix: str) -> bool:
+        """Register one account from env vars. suffix is '' or '_2'."""
+        uname  = os.getenv(f"TWITTER_USERNAME{suffix}", "")
+        passwd = os.getenv(f"TWITTER_PASSWORD{suffix}", "")
+        email  = os.getenv(f"TWITTER_EMAIL{suffix}", "")
+        epwd   = os.getenv(f"TWITTER_EMAIL_PASSWORD{suffix}", passwd)
+        token  = os.getenv(f"TWITTER_AUTH_TOKEN{suffix}", "")
+        ct0val = os.getenv(f"TWITTER_CT0{suffix}", "")
 
-        if username.lower() not in existing:
-            if auth_token and ct0:
-                # ── Cookie-based login (bypasses Cloudflare) ──────────────
-                logger.info("[twscrape] Adding account via cookies: %s", username)
-                cookies_str = f"auth_token={auth_token}; ct0={ct0}"
-                await api.pool.add_account(
-                    username=username,
-                    password=password or "placeholder",
-                    email=email or f"{username}@placeholder.com",
-                    email_password=email_password or "placeholder",
-                    cookies=cookies_str,
-                )
-                logger.info("[twscrape] Cookie-based account added.")
-            elif password and email:
-                # ── Username/Password login (may hit Cloudflare on cloud IPs) ──
-                logger.info("[twscrape] Adding account via password: %s", username)
-                await api.pool.add_account(
-                    username=username,
-                    password=password,
-                    email=email,
-                    email_password=email_password,
-                )
-                await api.pool.login_all()
-                logger.info("[twscrape] Password login attempted.")
+        if not uname:
+            return False
+
+        try:
+            existing = {a.username.lower(): a for a in await api.pool.get_all()}
+
+            if uname.lower() not in existing:
+                if token and ct0val:
+                    logger.info("[twscrape] Adding account%s via cookies: %s", suffix or "1", uname)
+                    await api.pool.add_account(
+                        username=uname,
+                        password=passwd or "placeholder",
+                        email=email or f"{uname}@placeholder.com",
+                        email_password=epwd or "placeholder",
+                        cookies=f"auth_token={token}; ct0={ct0val}",
+                    )
+                    logger.info("[twscrape] Cookie-based account%s added: %s", suffix or "1", uname)
+                elif passwd and email:
+                    logger.info("[twscrape] Adding account%s via password: %s", suffix or "1", uname)
+                    await api.pool.add_account(
+                        username=uname, password=passwd,
+                        email=email, email_password=epwd,
+                    )
+                    await api.pool.login_all()
+                    logger.info("[twscrape] Password login attempted for account%s: %s", suffix or "1", uname)
+                else:
+                    logger.warning(
+                        "[twscrape] Account%s (%s): need (AUTH_TOKEN+CT0) or (PASSWORD+EMAIL).",
+                        suffix or "1", uname,
+                    )
+                    return False
             else:
-                logger.warning(
-                    "[twscrape] Need either (TWITTER_AUTH_TOKEN + TWITTER_CT0) "
-                    "or (TWITTER_PASSWORD + TWITTER_EMAIL)."
-                )
-                return []
-        else:
-            acct = existing[username.lower()]
-            # If cookies changed, update them
-            if auth_token and ct0 and not getattr(acct, 'active', False):
-                logger.info("[twscrape] Re-adding account with fresh cookies: %s", username)
-                cookies_str = f"auth_token={auth_token}; ct0={ct0}"
-                await api.pool.delete_inactive()
-                await api.pool.add_account(
-                    username=username,
-                    password=password or "placeholder",
-                    email=email or f"{username}@placeholder.com",
-                    email_password=email_password or "placeholder",
-                    cookies=cookies_str,
-                )
-            else:
-                logger.info("[twscrape] Account already active: %s", username)
-    except Exception as exc:
-        logger.warning("[twscrape] Account setup failed: %s", exc)
+                acct = existing[uname.lower()]
+                # Refresh cookies if account is marked inactive and new cookies supplied
+                if token and ct0val and not getattr(acct, "active", True):
+                    logger.info("[twscrape] Refreshing cookies for account%s: %s", suffix or "1", uname)
+                    await api.pool.delete_inactive()
+                    await api.pool.add_account(
+                        username=uname,
+                        password=passwd or "placeholder",
+                        email=email or f"{uname}@placeholder.com",
+                        email_password=epwd or "placeholder",
+                        cookies=f"auth_token={token}; ct0={ct0val}",
+                    )
+                else:
+                    logger.info("[twscrape] Account%s already in pool: %s", suffix or "1", uname)
+        except Exception as exc:
+            logger.warning("[twscrape] Account%s setup failed (%s): %s", suffix or "1", uname, exc)
+            return False
+
+        return True
+
+    # ── Register accounts ────────────────────────────────────────────────────
+    acc1_ok = await _register_account("")          # primary (required)
+    if not acc1_ok:
+        logger.warning("[twscrape] Primary account (TWITTER_USERNAME) not configured — aborting.")
         return []
+    await _register_account("_2")                  # secondary (optional, silently skipped if not set)
 
+    # ── Pool health check ─────────────────────────────────────────────────
     results  = []
     seen_ids = set()
 
-    # Verify at least one account exists in the pool
     try:
-        available = await api.pool.get_all()
-        if not available:
+        all_accounts = await api.pool.get_all()
+        if not all_accounts:
             logger.warning("[twscrape] No accounts in pool — skipping search.")
             return []
-        # Log lock status so we can see if rate-limited
-        for acct in available:
-            locks = getattr(acct, 'locks', {}) or {}
+
+        now_utc = datetime.now(timezone.utc)
+        unlocked_count = 0
+        for acct in all_accounts:
+            locks      = getattr(acct, "locks", {}) or {}
             lock_until = locks.get("SearchTimeline")
-            logger.info("[twscrape] Account %s — SearchTimeline lock until: %s",
-                        getattr(acct, 'username', '?'), lock_until or "none")
+            logger.info(
+                "[twscrape] Account %-20s — SearchTimeline lock until: %s",
+                getattr(acct, "username", "?"),
+                lock_until or "none (available)",
+            )
+            # Count accounts whose lock has expired (or never set)
+            if lock_until is None or (hasattr(lock_until, "replace") and lock_until < now_utc):
+                unlocked_count += 1
+            elif isinstance(lock_until, str):
+                # some versions return a string
+                try:
+                    from datetime import datetime as _dt
+                    lt = _dt.fromisoformat(lock_until)
+                    if lt.tzinfo is None:
+                        lt = lt.replace(tzinfo=timezone.utc)
+                    if lt < now_utc:
+                        unlocked_count += 1
+                except Exception:
+                    pass
+
+        if unlocked_count == 0:
+            logger.warning(
+                "[twscrape] All %d account(s) are rate-limited — skipping search to avoid timeouts.",
+                len(all_accounts),
+            )
+            return []
+
+        logger.info("[twscrape] %d/%d account(s) available for search.", unlocked_count, len(all_accounts))
+
     except Exception as exc:
-        logger.warning("[twscrape] Could not check account pool: %s", exc)
+        logger.warning("[twscrape] Could not inspect account pool: %s", exc)
         return []
 
+    # ── Search queries ────────────────────────────────────────────────────
     for query in queries:
         if len(results) >= max_results:
             break
         logger.info("[twscrape] Searching: %s", query)
         try:
-            # Hard 90s timeout per query — prevents indefinite waits on rate limits
+            # 60s timeout per query — shorter to fail-fast when rate-limited
             tweets = await asyncio.wait_for(
                 gather(api.search(query, limit=50)),
-                timeout=90,
+                timeout=60,
             )
         except asyncio.TimeoutError:
-            logger.warning("[twscrape] Query timed out (90s), skipping: %s", query)
-            break  # If one query timed out, account is rate-limited — stop trying
+            logger.warning("[twscrape] Query timed out (60s), skipping: %s", query)
+            break  # pool is probably fully rate-limited — stop wasting time
         except Exception as exc:
             logger.warning("[twscrape] Search failed [%s]: %s", query, exc)
             continue
