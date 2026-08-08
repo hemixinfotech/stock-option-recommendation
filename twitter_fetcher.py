@@ -202,13 +202,39 @@ def _is_option_post(text: str, strict: bool = True) -> bool:
 # Strategy 1 — twscrape (real Twitter scraping via actual account)
 # ---------------------------------------------------------------------------
 
-TWSCRAPE_QUERIES = [
-    "BANKNIFTY OR NIFTY CE OR PE target SL -filter:retweets lang:en",
-    "NSE options CE PE buy target stoploss -filter:retweets lang:en",
-    "RELIANCE OR HDFCBANK OR TCS CE PE target SL -filter:retweets lang:en",
-    "SBIN OR ICICIBANK OR TATAMOTORS CE PE target SL -filter:retweets lang:en",
-    "FINNIFTY OR MIDCPNIFTY CE PE target SL -filter:retweets lang:en",
+# Curated list of target accounts to fetch recommendations from.
+# Tweets are fetched ONLY from these accounts; the old broad keyword queries
+# are kept as a fallback when this list is empty.
+TARGET_ACCOUNTS = [
+    "StockGoel", "raghavwadhwa", "itsTarH", "stockifiabhijit", "darshanvmehta1",
+    "vbomkara", "connectgurmeet", "WeekendInvestin", "soicfinance", "unseenvalue",
+    "stockmarket49", "arbindtiwariT", "Anirbban", "parthjaiswal", "myfirststock99",
+    "Alphamojo1", "Chart_Wallah108", "20kinvestor", "camangalarvind", "SamirPradhan",
+    "PSureshred55288", "sunilgurjar01", "Ak_vcp_Learner", "fnocharts",
 ]
+
+# Build one "from:" query per account so we fetch only their recent tweets.
+# Twitter search supports OR-ing up to ~20 from: clauses; batch them accordingly.
+def _build_account_queries(accounts: list[str], batch_size: int = 10) -> list[str]:
+    queries = []
+    for i in range(0, len(accounts), batch_size):
+        batch = accounts[i : i + batch_size]
+        from_clause = " OR ".join(f"from:{a}" for a in batch)
+        queries.append(f"({from_clause}) -filter:retweets")
+    return queries
+
+
+TWSCRAPE_QUERIES: list[str] = (
+    _build_account_queries(TARGET_ACCOUNTS)
+    if TARGET_ACCOUNTS
+    else [
+        "BANKNIFTY OR NIFTY CE OR PE target SL -filter:retweets lang:en",
+        "NSE options CE PE buy target stoploss -filter:retweets lang:en",
+        "RELIANCE OR HDFCBANK OR TCS CE PE target SL -filter:retweets lang:en",
+        "SBIN OR ICICIBANK OR TATAMOTORS CE PE target SL -filter:retweets lang:en",
+        "FINNIFTY OR MIDCPNIFTY CE PE target SL -filter:retweets lang:en",
+    ]
+)
 
 # Persistent account DB path (Railway volume or /tmp)
 _TWSCRAPE_DB = os.getenv("TWSCRAPE_DB_PATH", "/tmp/twscrape_accounts.db")
@@ -390,8 +416,12 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
                 continue
 
             u = tw.user
-            # Filter: only profiles with >= 20K followers
-            if (u.followersCount or 0) < 20000:
+            # When fetching from specific target accounts, skip the follower
+            # count gate; otherwise require >= 20K followers.
+            is_targeted = bool(TARGET_ACCOUNTS) and (
+                u.username.lower() in {a.lower() for a in TARGET_ACCOUNTS}
+            )
+            if not is_targeted and (u.followersCount or 0) < 20000:
                 continue
 
             parsed = parse_text(text)
