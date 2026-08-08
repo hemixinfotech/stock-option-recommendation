@@ -178,7 +178,11 @@ def determine_sentiment(option_type: Optional[str], hint: str = "") -> str:
 
 # Extended option keywords for broader post matching
 _OPTION_KEYWORDS = re.compile(
-    r"\b(CE|PE|call\s*option|put\s*option|call|put|options?\s*trade|F&O|FnO|intraday|swing|positional)\b",
+    r"\b(CE|PE|call\s*option|put\s*option|call|put|options?\s*trade|F&O|FnO|"
+    r"intraday|swing|positional|BTST|breakout|breakdown|buy|target|tgt|"
+    r"stoploss|stop\s*loss|SL|accumulate|CMP|entry|upside|downside|"
+    r"resistance|support|bullish|bearish|multibagger|stock\s*tip|"
+    r"trade\s*setup|setup|watchlist|reco|recommendation)\b",
     re.IGNORECASE,
 )
 
@@ -412,7 +416,7 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
             seen_ids.add(tweet_id)
 
             text = tw.rawContent or tw.content or ""
-            if RT_PATTERN.match(text) or not _is_option_post(text):
+            if RT_PATTERN.match(text):
                 continue
 
             u = tw.user
@@ -422,6 +426,11 @@ async def _twscrape_async(queries: list, max_results: int) -> list[dict]:
                 u.username.lower() in {a.lower() for a in TARGET_ACCOUNTS}
             )
             if not is_targeted and (u.followersCount or 0) < 20000:
+                continue
+
+            # Use relaxed post matching for curated target accounts so we
+            # capture stock calls, swing/breakout setups, etc. (not just CE/PE).
+            if not _is_option_post(text, strict=not is_targeted):
                 continue
 
             parsed = parse_text(text)
