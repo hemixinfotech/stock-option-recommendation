@@ -1,5 +1,9 @@
-# Credentials - NEVER commit .env to git
+# Credentials - NEVER commit secrets or sessions to git
 .env
+.env.*
+!.env.example
+*.session
+*.db
 
 # Python cache
 __pycache__/

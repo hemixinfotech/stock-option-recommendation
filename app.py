@@ -1,131 +1,36 @@
 """
 app.py
 ------
-Flask backend for the Stock Option Recommendation Dashboard.
-Serves the web UI and provides REST API endpoints.
-
-Endpoints:
-  GET /                     → Main dashboard UI
-  GET /api/recommendations  → All recommendations (JSON)
-  GET /api/recommendations?instrument_type=index|stock|btst|stock_report
-  GET /api/recommendations?min_followers=20000
-  GET /api/refresh          → Force refresh from Twitter API
-  GET /api/stats            → Summary statistics
+Flask backend for the Stock & Option Advisory Aggregation Platform.
+Serves the web dashboard and provides REST API endpoints for recommendations, statistics,
+and live test parsing.
 """
 
 import os
-import json
 import logging
-import threading
-import time
-from datetime import datetime, timezone, timedelta
-from functools import lru_cache
 from typing import Optional
 
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-from twitter_fetcher import fetch_recommendations, get_mock_data
+from config import FLASK_PORT, FLASK_DEBUG
+from storage import (
+    init_db, get_recommendations, get_recommendation_stats,
+    save_recommendation, delete_recommendation, clear_all_recommendations
+)
+from parser import SignalParser
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("stock_recommendation.app")
 
 app = Flask(__name__)
 CORS(app)
 
-# ---------------------------------------------------------------------------
-# In-memory data store with lock-free read pattern
-# ---------------------------------------------------------------------------
-
-_CACHE: dict = {
-    "data": [],
-    "last_updated": None,
-    "is_mock": True,
-}
-_CACHE_TTL_SECONDS = 900  # refresh every 15 minutes (avoids Twitter rate limits)
-_cache_lock = threading.Lock()
-
-# Seed cache immediately with mock data — API routes always respond instantly
-_CACHE["data"] = get_mock_data()
-_CACHE["is_mock"] = True
-logger.info("Cache pre-seeded with %d mock entries.", len(_CACHE["data"]))
-
-
-def _get_data() -> list:
-    """Return current cached data instantly — never blocks."""
-    with _cache_lock:
-        return list(_CACHE["data"])
-
-
-def _do_refresh() -> None:
-    """
-    Fetch live data and update cache.
-    The slow network fetch happens OUTSIDE the lock so API routes are never blocked.
-    """
-    logger.info("Background: fetching live recommendations from Twitter…")
-    try:
-        fetched = fetch_recommendations()
-    except Exception as exc:
-        logger.error("fetch_recommendations failed: %s", exc)
-        fetched = []
-
-    with _cache_lock:
-        if fetched:
-            _CACHE["data"] = fetched
-            _CACHE["is_mock"] = False
-            logger.info("Cache updated: %d live recommendations.", len(fetched))
-        else:
-            logger.warning("No live data returned — retaining existing cache.")
-            if not _CACHE["data"]:
-                _CACHE["data"] = get_mock_data()
-                _CACHE["is_mock"] = True
-        _CACHE["last_updated"] = datetime.now(timezone.utc)
-
-
-def _filter_data(data: list, horizon: Optional[str], instrument_type: Optional[str] = None,
-                 expiry_type: Optional[str] = None, min_followers: int = 0) -> list:
-    if horizon and horizon in ("today", "tomorrow", "monthly"):
-        data = [r for r in data if r.get("horizon") == horizon]
-    if instrument_type and instrument_type in ("index", "stock", "btst", "stock_report"):
-        data = [r for r in data if r.get("instrument_type") == instrument_type]
-    if expiry_type and expiry_type in ("weekly", "monthly"):
-        data = [r for r in data if r.get("expiry_type") == expiry_type]
-    if min_followers > 0:
-        data = [r for r in data if (r.get("author") or {}).get("followers", 0) >= min_followers]
-    return data
-
-
-def _sort_data(data: list, sort_by: str = "followers") -> list:
-    """Sort by follower count or engagement score."""
-    if sort_by == "engagement":
-        return sorted(
-            data,
-            key=lambda r: r.get("likes", 0) + r.get("retweets", 0) * 3,
-            reverse=True,
-        )
-    return sorted(
-        data,
-        key=lambda r: r.get("author", {}).get("followers", 0),
-        reverse=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Background auto-refresh thread (fetch lives here — NOT in request handlers)
-# ---------------------------------------------------------------------------
-
-def _background_refresh():
-    """Fetch live data immediately on startup, then every TTL seconds."""
-    while True:
-        _do_refresh()
-        time.sleep(_CACHE_TTL_SECONDS)
-
-
-_refresh_thread = threading.Thread(target=_background_refresh, daemon=True)
-_refresh_thread.start()
+# Initialize Signal Parser
+signal_parser = SignalParser(use_gemini_fallback=True)
 
 
 # ---------------------------------------------------------------------------
@@ -134,129 +39,95 @@ _refresh_thread.start()
 
 @app.route("/api/recommendations")
 def api_recommendations():
-    horizon         = request.args.get("horizon")
-    sort_by         = request.args.get("sort", "followers")
-    search          = request.args.get("q", "").strip().upper()
-    instrument_type = request.args.get("instrument_type")
-    expiry_type     = request.args.get("expiry_type")
-    min_followers   = int(request.args.get("min_followers", 0))
+    """
+    Fetch filtered recommendations from database.
+    Query parameters:
+    - category: OPTION | BTST | INVESTMENT | REPORT
+    - symbol: e.g., NIFTY, TATASTEEL
+    - q: search keyword in raw_text or symbol
+    - limit: max items (default 100)
+    """
+    category = request.args.get("category")
+    symbol = request.args.get("symbol")
+    search = request.args.get("q", "").strip().upper()
+    limit = int(request.args.get("limit", 100))
 
-    data = _get_data()
-    data = _filter_data(data, horizon, instrument_type, expiry_type, min_followers)
+    data = get_recommendations(category=category, symbol=symbol, limit=limit)
 
     if search:
         data = [
             r for r in data
             if search in (r.get("symbol") or "").upper()
-            or search in (r.get("text") or "").upper()
-            or search in (r.get("author", {}).get("name") or "").upper()
+            or search in (r.get("raw_text") or "").upper()
+            or search in (r.get("source_channel") or "").upper()
         ]
-
-    data = _sort_data(data, sort_by)
-
-    with _cache_lock:
-        is_mock     = _CACHE["is_mock"]
-        last_upd    = _CACHE["last_updated"]
 
     return jsonify({
         "success": True,
-        "is_mock": is_mock,
-        "last_updated": last_upd.isoformat() if last_upd else None,
         "count": len(data),
-        "recommendations": data,
+        "recommendations": data
     })
 
 
-@app.route("/api/refresh")
-def api_refresh():
-    # Trigger a background refresh (non-blocking) and return current cache
-    threading.Thread(target=_do_refresh, daemon=True).start()
-    with _cache_lock:
-        return jsonify({
-            "success": True,
-            "is_mock": _CACHE["is_mock"],
-            "last_updated": _CACHE["last_updated"].isoformat() if _CACHE["last_updated"] else None,
-            "count": len(_CACHE["data"]),
-            "message": "Refresh triggered in background.",
-        })
+@app.route("/api/recommendations/<int:rec_id>", methods=["DELETE"])
+def api_delete_recommendation(rec_id):
+    """Delete a single recommendation by ID."""
+    success = delete_recommendation(rec_id)
+    return jsonify({"success": success, "id": rec_id})
+
+
+@app.route("/api/recommendations/clear", methods=["POST", "DELETE"])
+def api_clear_all_recommendations():
+    """Clear all stored recommendations from database."""
+    deleted_count = clear_all_recommendations()
+    return jsonify({"success": True, "deleted_count": deleted_count})
 
 
 @app.route("/api/stats")
 def api_stats():
-    min_followers = int(request.args.get("min_followers", 0))
-    data = _get_data()
-    if min_followers > 0:
-        data = [r for r in data if (r.get("author") or {}).get("followers", 0) >= min_followers]
-
-    today_cnt       = sum(1 for r in data if r.get("horizon") == "today")
-    tomorrow_cnt    = sum(1 for r in data if r.get("horizon") == "tomorrow")
-    monthly_cnt     = sum(1 for r in data if r.get("horizon") == "monthly")
-    bullish_cnt     = sum(1 for r in data if r.get("sentiment") == "BULLISH")
-    bearish_cnt     = sum(1 for r in data if r.get("sentiment") == "BEARISH")
-    index_cnt       = sum(1 for r in data if r.get("instrument_type") == "index")
-    stock_cnt       = sum(1 for r in data if r.get("instrument_type") == "stock")
-    btst_cnt        = sum(1 for r in data if r.get("instrument_type") == "btst")
-    report_cnt      = sum(1 for r in data if r.get("instrument_type") == "stock_report")
-    weekly_cnt      = sum(1 for r in data if r.get("expiry_type") == "weekly")
-    monthly_exp_cnt = sum(1 for r in data if r.get("expiry_type") == "monthly")
-
-    top_authors = {}
-    for r in data:
-        author = r.get("author", {})
-        handle = author.get("handle", "unknown")
-        if handle not in top_authors:
-            top_authors[handle] = {
-                "name": author.get("name", ""),
-                "handle": handle,
-                "followers": author.get("followers", 0),
-                "count": 0,
-            }
-        top_authors[handle]["count"] += 1
-
-    top_authors_list = sorted(
-        top_authors.values(), key=lambda x: x["followers"], reverse=True
-    )[:5]
-
-    with _cache_lock:
-        is_mock  = _CACHE["is_mock"]
-        last_upd = _CACHE["last_updated"]
-
+    """Summary statistics across recommendations."""
+    stats = get_recommendation_stats()
     return jsonify({
         "success": True,
-        "total": len(data),
-        "today": today_cnt,
-        "tomorrow": tomorrow_cnt,
-        "monthly": monthly_cnt,
-        "bullish": bullish_cnt,
-        "bearish": bearish_cnt,
-        "index_count": index_cnt,
-        "stock_count": stock_cnt,
-        "btst_count": btst_cnt,
-        "report_count": report_cnt,
-        "weekly_count": weekly_cnt,
-        "monthly_expiry_count": monthly_exp_cnt,
-        "top_authors": top_authors_list,
-        "is_mock": is_mock,
-        "last_updated": last_upd.isoformat() if last_upd else None,
+        "stats": stats
     })
 
 
-# ---------------------------------------------------------------------------
-# Serve the frontend
-# ---------------------------------------------------------------------------
+@app.route("/api/parse", methods=["POST"])
+def api_parse_test():
+    """
+    Test endpoint for real-time message parsing.
+    Accepts JSON body: {"text": "...", "source_channel": "..."}
+    """
+    body = request.get_json() or {}
+    text = body.get("text", "")
+    source_channel = body.get("source_channel", "API Test")
+
+    if not text:
+        return jsonify({"success": False, "error": "Field 'text' is required"}), 400
+
+    parsed = signal_parser.parse_message(text=text, source_channel=source_channel)
+    # Persist parsed signal to database so it immediately appears in the UI
+    saved_record = save_recommendation(parsed)
+    return jsonify({
+        "success": True,
+        "saved": saved_record is not None,
+        "parsed": parsed.model_dump()
+    })
+
 
 @app.route("/")
 def index():
+    """Serve main web application dashboard."""
     with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), encoding="utf-8") as f:
         return f.read()
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Service Launcher
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", os.getenv("FLASK_PORT", 5000)))
-    debug = os.getenv("FLASK_DEBUG", "False").lower() == "true" if os.getenv("PORT") else True
-    logger.info("Starting Stock Option Recommendation Server on port %d (debug=%s)", port, debug)
-    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
+    init_db()
+    logger.info("Starting Web Dashboard on port %d (debug=%s)", FLASK_PORT, FLASK_DEBUG)
+    app.run(host="0.0.0.0", port=FLASK_PORT, debug=FLASK_DEBUG, use_reloader=False)

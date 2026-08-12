@@ -1,108 +1,133 @@
-# Stock Option Recommendation Dashboard - NSE/BSE
+# ✈️ Telegram Stock & Option Advisory Aggregator Engine
 
-Real-time stock option recommendations for Indian equity markets sourced from Twitter/X.
+A high-performance, asynchronous Python platform that monitors public and private Telegram channels/groups in real-time, extracts stock and option recommendations, standardizes raw advisory messages using a hybrid Regex + Gemini LLM parser, and categorizes signals into structured investment modules.
 
-## Features
+---
 
-- Twitter API v2 integration - searches for NIFTY, BANKNIFTY, NSE stock option tip tweets
-- Smart parsing - extracts Buy Price, Target (T1/T2), Stop Loss, Strike Price, Option Type (CE/PE)
-- Time horizon filters - Today (Intraday), Tomorrow (Positional), Monthly (Swing)
-- Author info - analyst name, Twitter handle, follower count, verified status
-- Market sentiment - live Bullish/Bearish gauge
-- Auto-refresh every 5 minutes
-- Demo mode - works with realistic mock data if no API key is provided
+## 🏗️ Architecture & Core Components
 
-## Quick Start
+1. **Telegram Async Listener (`telegram_listener.py`)**: Powered by **Telethon**. Listens asynchronously to incoming text, media captions, image updates, and PDF research reports with session persistence, automatic reconnection, and `FloodWait` rate-limit handling.
+2. **Hybrid Signal Parser (`parser.py`)**: 
+   - **Regex Engine**: High-speed pattern matching for standard calls (NIFTY/BANKNIFTY CE/PE options, BTST holds, targets, stop-loss).
+   - **Gemini API LLM Fallback**: Invoked automatically for complex, unstructured, or long-form research text when regex confidence is low.
+3. **Data Layer & Models (`models.py`, `storage.py`)**:
+   - **Pydantic Schemas**: Strict runtime data validation and serialization.
+   - **SQLAlchemy ORM**: SQLite/PostgreSQL storage with automatic SHA256 message deduplication.
+4. **Web Dashboard & API (`app.py`, `templates/index.html`)**: Interactive dark-mode dashboard displaying filtered signals, stats, and a live message parser tester.
+5. **CLI Launcher (`runner.py`)**: Single entrypoint to run the listener, dashboard, or test parsing standalone.
 
-### 1. Install dependencies
+---
+
+## 📂 Project Directory Structure
+
+```
+stock-option-recommendation/
+├── config.py                # Environment configuration & settings loader
+├── models.py                # Pydantic schemas & SQLAlchemy ORM database models
+├── parser.py                # Hybrid Regex + Gemini LLM advisory signal parser engine
+├── storage.py               # Database initialization, deduplication, & query helpers
+├── telegram_listener.py     # Asynchronous Telethon channel & group listener
+├── app.py                   # Flask REST API backend & web dashboard server
+├── runner.py                # CLI runner (all, listener, web, or test mode)
+├── templates/
+│   └── index.html           # Dashboard UI with live signal cards & interactive tester
+├── requirements.txt         # System Python dependencies
+├── .env.example             # Environment configuration template
+└── README.md                # System documentation & setup guide
+```
+
+---
+
+## 🏷️ Investment Buckets & Standardized JSON Schema
+
+Every ingested signal is validated into one of 4 buckets:
+1. `OPTION`: NIFTY/BANKNIFTY/Stock Calls & Puts (CE/PE, strike price, entry, targets, stop-loss).
+2. `BTST`: Buy Today, Sell Tomorrow short-term momentum holds.
+3. `INVESTMENT`: Long-term fundamental stock recommendations (multi-month targets).
+4. `REPORT`: Stock research notes, market updates, attached PDFs/images.
+
+### Standardized JSON Format
+```json
+{
+  "symbol": "TATASTEEL",
+  "category": "OPTION",
+  "action": "BUY",
+  "option_type": "CE",
+  "strike_price": 160.0,
+  "expiry": "29AUG2024",
+  "entry_range": [158.0, 160.0],
+  "targets": [165.0, 170.0, 175.0],
+  "stop_loss": 154.0,
+  "raw_text": "BUY TATASTEEL 160 CE ENTRY 158-160 TGT 165/170/175 SL 154 EXPIRY 29AUG2024",
+  "source_channel": "@OptionTradersHub",
+  "timestamp": "2026-08-12T20:30:00+00:00"
+}
+```
+
+---
+
+## 🚀 Quick Start Guide
+
+### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Twitter API credentials (optional)
+### 2. Configure Credentials
 
+Copy `.env.example` to `.env`:
 ```bash
 copy .env.example .env
 ```
 
-Edit `.env` and fill in:
+Edit `.env` and enter your credentials:
+```env
+# Get API_ID & API_HASH from https://my.telegram.org
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_PHONE=+919876543210
+TELEGRAM_CHANNELS=@nifty_options_calls, @stock_advisory_india
+
+# Optional Gemini API Key for LLM fallback parsing
+GEMINI_API_KEY=your_gemini_api_key
 ```
-TWITTER_BEARER_TOKEN=your_actual_bearer_token
-TWITTER_API_KEY=your_api_key
-TWITTER_API_SECRET=your_api_secret
-TWITTER_ACCESS_TOKEN=your_access_token
-TWITTER_ACCESS_TOKEN_SECRET=your_access_token_secret
-```
 
-Without credentials, the app runs with realistic demo data.
+### 3. Run the Platform
 
-### 3. Run the server
-
+#### Run Web Dashboard + Telegram Listener Concurrently:
 ```bash
-python app.py
+python runner.py --mode all
 ```
 
-### 4. Open browser
-
-Navigate to: http://localhost:5000
-
-## Getting Twitter API Credentials
-
-1. Go to https://developer.twitter.com/en/portal/dashboard
-2. Create a new Project and App
-3. Under Keys and Tokens, copy your Bearer Token (minimum required)
-
-### API Tier Requirements
-
-| Feature | Free | Basic ($100/mo) | Pro ($5000/mo) |
-|---------|------|-----------------|----------------|
-| Recent Search (7 days) | Limited | 10K tweets/mo | Unlimited |
-| User lookup | Yes | Yes | Yes |
-| Full archive search | No | No | Yes |
-
-## Project Structure
-
-```
-stock-option-recommendation/
-├── app.py                # Flask backend & API routes
-├── twitter_fetcher.py    # Twitter API client + tweet parser
-├── requirements.txt      # Python dependencies
-├── .env.example          # Credentials template
-├── .env                  # Your credentials (git-ignored)
-└── templates/
-    └── index.html        # Full dashboard UI
+#### Run Web Dashboard Only:
+```bash
+python runner.py --mode web
 ```
 
-## API Endpoints
+#### Run Telegram Listener Only:
+```bash
+python runner.py --mode listener
+```
 
-| Endpoint | Description |
-|---------|-------------|
-| GET / | Dashboard UI |
-| GET /api/recommendations | All recommendations (JSON) |
-| GET /api/recommendations?horizon=today | Filter by time horizon |
-| GET /api/recommendations?sort=engagement | Sort by engagement |
-| GET /api/recommendations?q=BANKNIFTY | Search by symbol |
-| GET /api/refresh | Force refresh from Twitter |
-| GET /api/stats | Summary statistics |
+#### Test Signal Parser via CLI:
+```bash
+python runner.py --mode test --text "BUY NIFTY 24500 CE ENTRY 140-145 SL 120 TGT 165/185"
+```
 
-## Parsed Data Fields
+---
 
-Each recommendation includes:
-- symbol - Stock symbol (NIFTY, BANKNIFTY, RELIANCE, etc.)
-- option_type - CE (Call) or PE (Put)
-- strike_price - Strike price
-- buy_price - Entry/buy price
-- targets - Array of target prices [T1, T2]
-- stop_loss - Stop loss price
-- horizon - today / tomorrow / monthly
-- expiry - Option expiry date
-- sentiment - BULLISH (CE) or BEARISH (PE)
-- author.name - Analyst name
-- author.handle - Twitter handle
-- author.followers - Follower count
-- author.verified - Verification status
+## 🔌 REST API Endpoints
 
-## Disclaimer
+| Endpoint | Method | Description |
+|---|---|---|
+| `GET /` | GET | Main web dashboard UI |
+| `GET /api/recommendations` | GET | List filtered recommendations (query params: `category`, `symbol`, `q`) |
+| `GET /api/stats` | GET | Summary statistics across categories and channels |
+| `POST /api/parse` | POST | Test raw signal text live (`{"text": "...", "source_channel": "..."}`) |
 
-These recommendations are from Twitter/X social media only. NOT SEBI-registered investment advice. Options trading involves significant risk. Always do your own research.
+---
+
+## 🛡️ License & Disclaimer
+
+These recommendations are aggregated from Telegram channels for research and informational purposes only. This system does NOT provide SEBI-registered investment advice.
