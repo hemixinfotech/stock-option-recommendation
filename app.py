@@ -29,7 +29,8 @@ logger = logging.getLogger("stock_recommendation.app")
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Signal Parser
+# Initialize Database & Signal Parser
+init_db()
 signal_parser = SignalParser(use_gemini_fallback=True)
 
 
