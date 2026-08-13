@@ -177,6 +177,27 @@ class TelegramListenerService:
         logger.info("Channels: %s", ", ".join(self.channels))
         logger.info("=====================================================")
 
+        # Launch automated daily cleanup task (End of Day - 12:00 AM IST)
+        async def daily_cleanup_loop():
+            from datetime import timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            from storage import clear_all_recommendations
+            while True:
+                now_ist = datetime.now(ist_offset)
+                # Target midnight (00:00 IST) for end of day
+                target = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+                if now_ist >= target:
+                    target += timedelta(days=1)
+                
+                sleep_secs = (target - now_ist).total_seconds()
+                logger.info("Next end-of-day auto-cleanup scheduled in %.1f hours.", sleep_secs / 3600)
+                await asyncio.sleep(sleep_secs)
+                
+                logger.info("Executing scheduled end-of-day database cleanup...")
+                clear_all_recommendations()
+
+        asyncio.create_task(daily_cleanup_loop())
+
         # Run Telethon client until disconnected
         await self.client.run_until_disconnected()
 
