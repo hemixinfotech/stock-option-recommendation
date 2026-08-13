@@ -40,6 +40,33 @@ def get_db() -> Session:
         db.close()
 
 
+def _is_noise(schema_or_model) -> bool:
+    """Helper to detect if a message is just noise (UNKNOWN symbol, image only, or target complete)."""
+    symbol = getattr(schema_or_model, "symbol", "UNKNOWN")
+    if symbol == "UNKNOWN":
+        return True
+    
+    raw = (getattr(schema_or_model, "raw_text", "") or "").lower()
+    if "[image attached]" in raw and "no text caption provided" in raw:
+        return True
+        
+    noise_keywords = [
+        "target complete", "target hit", "target achieved", "target done",
+        "jackpot", "today jackpot", "boom", "rocket", "full target"
+    ]
+    
+    # Check if entry_range exists
+    if hasattr(schema_or_model, "entry_range"):
+        has_entry = bool(schema_or_model.entry_range)
+    else:
+        # It's a DB model, so check entry_range_json
+        has_entry = bool(getattr(schema_or_model, "entry_range_json", None))
+        
+    if any(kw in raw for kw in noise_keywords) and not has_entry:
+        return True
+        
+    return False
+
 def save_recommendation(
     schema: RecommendationSchema,
     telegram_message_id: Optional[int] = None
@@ -48,6 +75,11 @@ def save_recommendation(
     Save recommendation to database with automatic hash deduplication.
     Returns the created record or None if duplicate.
     """
+    # Reject noise before saving
+    if _is_noise(schema):
+        logger.debug("Filtered out noise message: %s", (schema.raw_text or "")[:50])
+        return None
+
     msg_hash = schema.compute_hash()
     db = SessionLocal()
     try:
@@ -113,8 +145,17 @@ def get_recommendations(
         if source_channel:
             query = query.filter(RecommendationModel.source_channel == source_channel)
         
-        records = query.order_by(RecommendationModel.timestamp.desc()).limit(limit).all()
-        return [r.to_dict() for r in records]
+        # We query more than limit in case we filter out many in Python
+        records = query.order_by(RecommendationModel.timestamp.desc()).limit(limit * 2).all()
+        
+        valid_records = []
+        for r in records:
+            if not _is_noise(r):
+                valid_records.append(r.to_dict())
+                if len(valid_records) >= limit:
+                    break
+                    
+        return valid_records
     finally:
         db.close()
 
@@ -124,12 +165,16 @@ def get_recommendation_stats() -> Dict[str, Any]:
     db = SessionLocal()
     try:
         records = db.query(RecommendationModel).all()
-        total = len(records)
+        total = 0
         categories = {"OPTION": 0, "BTST": 0, "INVESTMENT": 0, "REPORT": 0}
         symbols = {}
         channels = {}
 
         for r in records:
+            if _is_noise(r):
+                continue
+                
+            total += 1
             if r.category in categories:
                 categories[r.category] += 1
             symbols[r.symbol] = symbols.get(r.symbol, 0) + 1
