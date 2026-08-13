@@ -129,11 +129,15 @@ class SignalParser:
 
         # 1. Category Classification
         category = CategoryEnum.OPTION
-        if re.search(r"\b(BTST|STBT|BUY TODAY|SELL TOMORROW)\b", upper_text):
+        
+        # Any big paragraph (many lines or long text) should go to Reports & Research
+        if len(text) > 300 or text.count('\n') >= 5:
+            category = CategoryEnum.REPORT
+        elif re.search(r"\b(BTST|STBT|BUY TODAY|SELL TOMORROW)\b", upper_text):
             category = CategoryEnum.BTST
         elif re.search(r"\b(INVESTMENT|LONG TERM|FUNDAMENTAL|MULTIPACKER|TARGET \d+ MONTHS|BUY AND HOLD)\b", upper_text):
             category = CategoryEnum.INVESTMENT
-        elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE)\b", upper_text) and len(text) > 300:
+        elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE)\b", upper_text):
             category = CategoryEnum.REPORT
         elif re.search(r"\b(CE|PE|CALL|PUT)\b", upper_text) or any(idx in upper_text for idx in INDEX_SYMBOLS):
             category = CategoryEnum.OPTION
