@@ -17,11 +17,15 @@ logger = logging.getLogger("stock_recommendation.notifier")
 
 
 def format_alert_message(data: Union[Dict[str, Any], Any]) -> str:
-    """Format a recommendation dictionary or SignalSchema object into HTML for Telegram Bot."""
-    if hasattr(data, "model_dump"):
+    """Format a recommendation dictionary, SQLAlchemy model, or SignalSchema object into HTML for Telegram Bot."""
+    if hasattr(data, "to_dict") and callable(data.to_dict):
+        rec = data.to_dict()
+    elif hasattr(data, "model_dump") and callable(data.model_dump):
         rec = data.model_dump()
     elif isinstance(data, dict):
         rec = data
+    elif hasattr(data, "__dict__"):
+        rec = data.__dict__
     else:
         rec = dict(data)
 
