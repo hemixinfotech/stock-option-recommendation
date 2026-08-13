@@ -44,35 +44,38 @@ class TelegramListenerService:
         """Initialize Telethon client and establish session connection."""
         if not self.api_id or not self.api_hash or self.api_id == 0 or "your_" in str(self.api_hash).lower():
             raise ValueError(
-                "Missing or invalid TELEGRAM_API_ID / TELEGRAM_API_HASH in .env file! "
-                "Please replace the placeholder values in .env with your real credentials from https://my.telegram.org"
+                "Missing or invalid TELEGRAM_API_ID / TELEGRAM_API_HASH! "
+                "Please configure real credentials from https://my.telegram.org in environment variables."
             )
 
         if self.session_string:
             from telethon.sessions import StringSession
             logger.info("Initializing Telethon client with StringSession...")
             self.client = TelegramClient(StringSession(self.session_string), self.api_id, self.api_hash)
-        else:
-            logger.info("Initializing Telethon client with session file '%s'...", self.session_name)
-            self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
+            await self.client.connect()
+            if await self.client.is_user_authorized():
+                logger.info("Successfully authenticated with Telegram API via StringSession!")
+                return
+            else:
+                logger.error("TELEGRAM_SESSION_STRING is invalid or expired.")
+                raise ValueError("Provided TELEGRAM_SESSION_STRING is not authorized or has expired. Please regenerate your session string.")
 
+        # Local fallback using session file or interactive login
         import sys
         is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
 
-        phone_val = self.phone.strip() if (self.phone and isinstance(self.phone, str) and self.phone.strip()) else None
-
-        if self.session_string:
-            phone_param = phone_val
-        elif not is_interactive:
+        if not is_interactive:
             logger.error(
-                "Telegram session is not authorized and server is in non-interactive mode. "
+                "Telegram session is not authorized and server is running in non-interactive mode. "
                 "Set TELEGRAM_SESSION_STRING in environment variables."
             )
             raise ValueError("TELEGRAM_SESSION_STRING environment variable is required for cloud / headless deployment on Railway.")
-        elif phone_val:
-            phone_param = phone_val
-        else:
-            phone_param = lambda: input("Enter Telegram phone number (e.g. +919876543210): ")
+
+        logger.info("Initializing Telethon client with session file '%s'...", self.session_name)
+        self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
+
+        phone_val = self.phone.strip() if (self.phone and isinstance(self.phone, str) and self.phone.strip()) else None
+        phone_param = phone_val or (lambda: input("Enter Telegram phone number (e.g. +919876543210): "))
 
         await self.client.start(phone=phone_param)
         logger.info("Successfully authenticated with Telegram API!")
