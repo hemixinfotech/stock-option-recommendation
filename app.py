@@ -117,16 +117,34 @@ def api_parse_test():
     })
 
 
+# ---------------------------------------------------------------------------
+# Background Listener Launcher for Production WSGI / Live Hosting
+# ---------------------------------------------------------------------------
+
+import threading
+from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNELS, TELEGRAM_SESSION_STRING
+
+_listener_thread = None
+_listener_status = {"started": False, "error": None}
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint showing backend and Telegram listener status."""
     is_alive = _listener_thread is not None and _listener_thread.is_alive()
+    err_msg = _listener_status.get("error")
+    if not is_alive and not err_msg:
+        if not TELEGRAM_SESSION_STRING:
+            err_msg = "TELEGRAM_SESSION_STRING is missing in Railway environment variables."
+        else:
+            err_msg = "Listener process stopped or failed to connect."
+
     return jsonify({
         "success": True,
         "listener_running": is_alive,
         "channels_count": len(TELEGRAM_CHANNELS),
         "status": "active" if is_alive else "idle_or_disabled",
-        "error": _listener_status.get("error")
+        "error": err_msg
     })
 
 
@@ -136,16 +154,6 @@ def index():
     with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), encoding="utf-8") as f:
         return f.read()
 
-
-# ---------------------------------------------------------------------------
-# Background Listener Launcher for Production WSGI / Live Hosting
-# ---------------------------------------------------------------------------
-
-import threading
-from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNELS
-
-_listener_thread = None
-_listener_status = {"started": False, "error": None}
 
 def start_telegram_listener_background():
     global _listener_thread
@@ -161,6 +169,7 @@ def start_telegram_listener_background():
         try:
             from telegram_listener import run_telegram_listener
             _listener_status["started"] = True
+            _listener_status["error"] = None
             run_telegram_listener()
         except Exception as exc:
             _listener_status["error"] = str(exc)

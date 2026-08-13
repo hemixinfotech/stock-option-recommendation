@@ -59,18 +59,20 @@ class TelegramListenerService:
         import sys
         is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
 
-        if self.phone and isinstance(self.phone, str) and self.phone.strip():
-            phone_param = self.phone.strip()
-        elif is_interactive:
-            phone_param = lambda: input("Enter Telegram phone number (e.g. +919876543210): ")
+        phone_val = self.phone.strip() if (self.phone and isinstance(self.phone, str) and self.phone.strip()) else None
+
+        if self.session_string:
+            phone_param = phone_val
+        elif not is_interactive:
+            logger.error(
+                "Telegram session is not authorized and server is in non-interactive mode. "
+                "Set TELEGRAM_SESSION_STRING in environment variables."
+            )
+            raise ValueError("TELEGRAM_SESSION_STRING environment variable is required for cloud / headless deployment on Railway.")
+        elif phone_val:
+            phone_param = phone_val
         else:
-            if not self.session_string:
-                logger.error(
-                    "Telegram session is not authorized and server is in non-interactive mode. "
-                    "Run 'python generate_string_session.py' locally to generate TELEGRAM_SESSION_STRING and set it in environment variables."
-                )
-                raise ValueError("TELEGRAM_SESSION_STRING required for cloud / headless deployment.")
-            phone_param = None
+            phone_param = lambda: input("Enter Telegram phone number (e.g. +919876543210): ")
 
         await self.client.start(phone=phone_param)
         logger.info("Successfully authenticated with Telegram API!")
@@ -180,6 +182,7 @@ def run_telegram_listener():
         logger.info("Telegram Listener service stopped by user.")
     except Exception as exc:
         logger.critical("Fatal error in Telegram Listener service: %s", exc, exc_info=True)
+        raise exc
 
 
 if __name__ == "__main__":
