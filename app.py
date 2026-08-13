@@ -124,10 +124,10 @@ def api_parse_test():
     })
 
 
-@app.route("/api/test-alert", methods=["POST"])
+@app.route("/api/test-alert", methods=["POST", "GET"])
 def api_test_alert():
     """Test endpoint to trigger a sample push alert notification."""
-    from notifier import send_telegram_alert
+    from notifier import send_telegram_alert_verbose
     test_data = {
         "symbol": "NIFTY",
         "category": "OPTION",
@@ -139,12 +139,12 @@ def api_test_alert():
         "stop_loss": 120,
         "timeframe": "INTRADAY",
         "source_channel": "UI Test Alert",
-        "raw_text": "BUY NIFTY 24500 CE ENTRY 140-145 SL 120 TGT 165/185 (Test Mobile Push Notification)"
+        "raw_text": "BUY NIFTY 24500 CE ENTRY 140-145 SL 120 TGT 165/185 <Test HTML & Special Characters>"
     }
-    sent = send_telegram_alert(test_data)
+    sent, details = send_telegram_alert_verbose(test_data)
     return jsonify({
         "success": sent,
-        "message": "Push alert dispatched successfully!" if sent else "Failed to send alert. Check TELEGRAM_ALERT_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID in environment variables."
+        "message": details
     })
 
 
