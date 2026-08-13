@@ -540,10 +540,13 @@
           statusText.innerText = `Live Telegram Engine (${healthData.channels_count} Channels)`;
           pulseDot.style.background = '#10b981';
           badge.style.borderColor = 'rgba(16,185,129,0.3)';
+          badge.title = "Telegram Listener is active and monitoring channels in real time.";
         } else {
-          statusText.innerText = healthData.error ? `Listener Idle (${healthData.error})` : 'Listener Offline';
-          pulseDot.style.background = '#f59e0b';
-          badge.style.borderColor = 'rgba(245,158,11,0.3)';
+          const errDesc = healthData.error || 'Missing TELEGRAM_SESSION_STRING in cloud deployment';
+          statusText.innerText = `Listener Offline (${healthData.error ? 'Auth Needed' : 'Stopped'})`;
+          pulseDot.style.background = '#ef4444';
+          badge.style.borderColor = 'rgba(239,68,68,0.4)';
+          badge.title = `Status Error: ${errDesc}. Set TELEGRAM_SESSION_STRING in your cloud deployment environment variables.`;
         }
       } catch (err) {
         console.error('Error updating stats:', err);

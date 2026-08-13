@@ -90,10 +90,11 @@ class TelegramListenerService:
                 logger.error("Could not resolve channel '%s': %s", ch, exc)
         return resolved_entities
 
-    def register_handlers(self):
+    def register_handlers(self, chats=None):
         """Register asynchronous event listeners for new incoming messages and media."""
+        monitored_chats = chats if chats is not None else self.channels
         
-        @self.client.on(events.NewMessage(chats=self.channels))
+        @self.client.on(events.NewMessage(chats=monitored_chats if monitored_chats else None))
         async def on_new_message(event: events.NewMessage.Event):
             try:
                 message = event.message
@@ -152,8 +153,14 @@ class TelegramListenerService:
         """Main async loop to start the Telegram listener with auto-reconnect."""
         init_db()
         await self.initialize()
-        await self.resolve_channels()
-        self.register_handlers()
+        resolved_entities = await self.resolve_channels()
+        
+        if resolved_entities:
+            logger.info("Registered %d resolved channel entities for event listening.", len(resolved_entities))
+            self.register_handlers(chats=resolved_entities)
+        else:
+            logger.warning("No valid channel entities resolved. Monitoring all account messages...")
+            self.register_handlers(chats=None)
 
         logger.info("=====================================================")
         logger.info("Telegram Advisory Listener is live and monitoring!")

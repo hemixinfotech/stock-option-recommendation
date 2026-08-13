@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-*.session
+*.session*
 *.db
 
 # Python cache

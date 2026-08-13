@@ -21,11 +21,11 @@ logging.basicConfig(level=logging.WARNING)
 
 async def check_channels():
     print("=" * 60)
-    print("🔍 Telegram Channel & Group Verification Utility")
+    print("[SEARCH] Telegram Channel & Group Verification Utility")
     print("=" * 60)
 
     if not TELEGRAM_API_ID or not TELEGRAM_API_HASH or TELEGRAM_API_ID == 0:
-        print("❌ ERROR: Missing or invalid TELEGRAM_API_ID / TELEGRAM_API_HASH in .env!")
+        print("[ERROR] Missing or invalid TELEGRAM_API_ID / TELEGRAM_API_HASH in .env!")
         print("Please configure your credentials from https://my.telegram.org in .env first.")
         return
 
@@ -47,20 +47,19 @@ async def check_channels():
 
             title = getattr(entity, "title", getattr(entity, "username", ch))
             ch_id = getattr(entity, "id", "N/A")
-            participants = getattr(entity, "participants_count", "N/A")
             ch_type = type(entity).__name__
 
-            print(f"  ✅ VALID: {ch:<25} ➔  Name: '{title}' (ID: {ch_id}, Type: {ch_type})")
+            print(f"  [OK] VALID: {ch:<30} -> Name: '{title}' (ID: {ch_id}, Type: {ch_type})")
             valid_count += 1
         except RPCError as rpc_err:
-            print(f"  ❌ INVALID / UNREACHABLE: {ch:<20} ➔ Error: {rpc_err.message}")
+            print(f"  [FAIL] INVALID / UNREACHABLE: {ch:<25} -> Error: {rpc_err.message}")
             invalid_count += 1
         except Exception as exc:
-            print(f"  ❌ INVALID / UNREACHABLE: {ch:<20} ➔ Error: {exc}")
+            print(f"  [FAIL] INVALID / UNREACHABLE: {ch:<25} -> Error: {exc}")
             invalid_count += 1
 
     print("\n" + "=" * 60)
-    print(f"📊 Summary: {valid_count} Valid | {invalid_count} Invalid/Unreachable")
+    print(f"Summary: {valid_count} Valid | {invalid_count} Invalid/Unreachable")
     print("=" * 60)
 
     await client.disconnect()
