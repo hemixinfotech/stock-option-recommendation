@@ -110,10 +110,41 @@ def api_parse_test():
     parsed = signal_parser.parse_message(text=text, source_channel=source_channel)
     # Persist parsed signal to database so it immediately appears in the UI
     saved_record = save_recommendation(parsed)
+    if saved_record:
+        try:
+            from notifier import send_telegram_alert
+            send_telegram_alert(saved_record)
+        except Exception as notify_err:
+            logger.error("Failed to send push alert from API parse: %s", notify_err)
+
     return jsonify({
         "success": True,
         "saved": saved_record is not None,
         "parsed": parsed.model_dump()
+    })
+
+
+@app.route("/api/test-alert", methods=["POST"])
+def api_test_alert():
+    """Test endpoint to trigger a sample push alert notification."""
+    from notifier import send_telegram_alert
+    test_data = {
+        "symbol": "NIFTY",
+        "category": "OPTION",
+        "action": "BUY",
+        "option_type": "CE",
+        "strike_price": 24500,
+        "entry_range": [140, 145],
+        "targets": [165, 185],
+        "stop_loss": 120,
+        "timeframe": "INTRADAY",
+        "source_channel": "UI Test Alert",
+        "raw_text": "BUY NIFTY 24500 CE ENTRY 140-145 SL 120 TGT 165/185 (Test Mobile Push Notification)"
+    }
+    sent = send_telegram_alert(test_data)
+    return jsonify({
+        "success": sent,
+        "message": "Push alert dispatched successfully!" if sent else "Failed to send alert. Check TELEGRAM_ALERT_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID in environment variables."
     })
 
 

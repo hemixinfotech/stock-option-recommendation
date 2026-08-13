@@ -145,6 +145,11 @@ class TelegramListenerService:
                 if saved_record:
                     logger.info("Successfully ingested: %s | %s | %s", 
                                 saved_record.symbol, saved_record.category, saved_record.action)
+                    try:
+                        from notifier import send_telegram_alert
+                        send_telegram_alert(saved_record)
+                    except Exception as notify_err:
+                        logger.error("Failed to send push alert: %s", notify_err)
 
             except FloodWaitError as flood_err:
                 logger.warning("Telegram FloodWait rate limit hit! Sleeping for %d seconds...", flood_err.seconds)

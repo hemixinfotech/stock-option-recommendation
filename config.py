@@ -40,6 +40,10 @@ TELEGRAM_CHANNELS: List[str] = [
     ch.strip() for ch in raw_channels.split(",") if ch.strip()
 ]
 
+# Telegram Push Alert Bot Settings
+TELEGRAM_ALERT_BOT_TOKEN: str = os.getenv("TELEGRAM_ALERT_BOT_TOKEN", "").strip()
+TELEGRAM_ALERT_CHAT_ID: str = os.getenv("TELEGRAM_ALERT_CHAT_ID", "").strip()
+
 # Gemini API Configuration for Hybrid Parsing
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
