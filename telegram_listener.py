@@ -56,7 +56,22 @@ class TelegramListenerService:
             logger.info("Initializing Telethon client with session file '%s'...", self.session_name)
             self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
 
-        phone_param = self.phone.strip() if (self.phone and isinstance(self.phone, str) and self.phone.strip()) else lambda: input("Enter Telegram phone number (e.g. +919876543210): ")
+        import sys
+        is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+
+        if self.phone and isinstance(self.phone, str) and self.phone.strip():
+            phone_param = self.phone.strip()
+        elif is_interactive:
+            phone_param = lambda: input("Enter Telegram phone number (e.g. +919876543210): ")
+        else:
+            if not self.session_string:
+                logger.error(
+                    "Telegram session is not authorized and server is in non-interactive mode. "
+                    "Run 'python generate_string_session.py' locally to generate TELEGRAM_SESSION_STRING and set it in environment variables."
+                )
+                raise ValueError("TELEGRAM_SESSION_STRING required for cloud / headless deployment.")
+            phone_param = None
+
         await self.client.start(phone=phone_param)
         logger.info("Successfully authenticated with Telegram API!")
 

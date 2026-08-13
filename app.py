@@ -117,11 +117,61 @@ def api_parse_test():
     })
 
 
+@app.route("/api/health")
+def api_health():
+    """Health check endpoint showing backend and Telegram listener status."""
+    is_alive = _listener_thread is not None and _listener_thread.is_alive()
+    return jsonify({
+        "success": True,
+        "listener_running": is_alive,
+        "channels_count": len(TELEGRAM_CHANNELS),
+        "status": "active" if is_alive else "idle_or_disabled",
+        "error": _listener_status.get("error")
+    })
+
+
 @app.route("/")
 def index():
     """Serve main web application dashboard."""
     with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), encoding="utf-8") as f:
         return f.read()
+
+
+# ---------------------------------------------------------------------------
+# Background Listener Launcher for Production WSGI / Live Hosting
+# ---------------------------------------------------------------------------
+
+import threading
+from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNELS
+
+_listener_thread = None
+_listener_status = {"started": False, "error": None}
+
+def start_telegram_listener_background():
+    global _listener_thread
+    if _listener_thread is not None and _listener_thread.is_alive():
+        return
+
+    if not TELEGRAM_API_ID or not TELEGRAM_API_HASH or TELEGRAM_API_ID == 0:
+        logger.warning("Telegram API credentials not configured. Background listener will not start.")
+        _listener_status["error"] = "Missing TELEGRAM_API_ID or TELEGRAM_API_HASH"
+        return
+
+    def _run():
+        try:
+            from telegram_listener import run_telegram_listener
+            _listener_status["started"] = True
+            run_telegram_listener()
+        except Exception as exc:
+            _listener_status["error"] = str(exc)
+            logger.error("Background Telegram Listener crashed or failed to start: %s", exc)
+
+    _listener_thread = threading.Thread(target=_run, daemon=True, name="TelegramListenerThread")
+    _listener_thread.start()
+    logger.info("Background Telegram Listener thread launched.")
+
+# Auto-start background listener when app module is imported/loaded in server
+start_telegram_listener_background()
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +182,4 @@ if __name__ == "__main__":
     init_db()
     logger.info("Starting Web Dashboard on port %d (debug=%s)", FLASK_PORT, FLASK_DEBUG)
     app.run(host="0.0.0.0", port=FLASK_PORT, debug=FLASK_DEBUG, use_reloader=False)
+

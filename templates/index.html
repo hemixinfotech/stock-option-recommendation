@@ -428,9 +428,9 @@
       </div>
     </div>
     <div class="nav-right">
-      <div class="status-badge">
-        <div class="pulse-dot"></div>
-        <span>Telegram Engine Active</span>
+      <div class="status-badge" id="nav-status-badge">
+        <div class="pulse-dot" id="nav-pulse-dot"></div>
+        <span id="nav-status-text">Checking Listener...</span>
       </div>
       <button class="btn-action" onclick="fetchData()">Refresh</button>
       <button class="btn-action btn-danger" onclick="clearAllData()">🗑️ Clear All</button>
@@ -527,6 +527,23 @@
           document.getElementById('badge-btst').innerText = c.BTST || 0;
           document.getElementById('badge-investment').innerText = c.INVESTMENT || 0;
           document.getElementById('badge-report').innerText = c.REPORT || 0;
+        }
+
+        // Query health status
+        const healthRes = await fetch('/api/health');
+        const healthData = await healthRes.json();
+        const statusText = document.getElementById('nav-status-text');
+        const pulseDot = document.getElementById('nav-pulse-dot');
+        const badge = document.getElementById('nav-status-badge');
+
+        if (healthData.listener_running) {
+          statusText.innerText = `Live Telegram Engine (${healthData.channels_count} Channels)`;
+          pulseDot.style.background = '#10b981';
+          badge.style.borderColor = 'rgba(16,185,129,0.3)';
+        } else {
+          statusText.innerText = healthData.error ? `Listener Idle (${healthData.error})` : 'Listener Offline';
+          pulseDot.style.background = '#f59e0b';
+          badge.style.borderColor = 'rgba(245,158,11,0.3)';
         }
       } catch (err) {
         console.error('Error updating stats:', err);

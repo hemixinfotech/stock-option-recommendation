@@ -111,6 +111,22 @@ class SignalParser:
         """Regex-based rule engine for standard advisory calls."""
         upper_text = text.upper()
 
+        # Comprehensive set of non-symbol noise words common in Telegram market channels
+        ignored_words = {
+            "BUY", "SELL", "BTST", "STBT", "CALL", "PUT", "STOP", "LOSS", "STOPLOSS",
+            "TARGET", "TARGETS", "TGT", "ABOVE", "BELOW", "ENTRY", "RANGE", "TODAY", "TOMORROW",
+            "LONG", "SHORT", "TERM", "HOLD", "PICK", "STOCK", "NOW", "CMP", "PRICE", "EXIT",
+            "BOOK", "PROFIT", "SUPER", "POWER", "CALLS", "VIP", "FREE", "HERO", "ZERO", "JACKPOT",
+            "EQUITY", "ALERT", "ALERTS", "GOOD", "MORNING", "DAILY", "WEEKLY", "MONTHLY",
+            "LEVEL", "LEVELS", "SPOT", "FUTURE", "FUTURES", "CHART", "DISCLAIMER", "TRADE",
+            "TRADING", "ADVISORY", "STRONG", "BREAKOUT", "BOOM", "ROCKET", "FAST", "VERY",
+            "HIGH", "LOW", "RISK", "INTRADAY", "POSITIONAL", "NEW", "JOIN", "TELEGRAM",
+            "CHANNEL", "GROUP", "THIS", "THAT", "WITH", "FROM", "FOR", "AND", "THE", "YOU",
+            "YOUR", "OUR", "WILL", "HIT", "DONE", "BEST", "SURE", "SURESHOT", "GAIN", "GAINS",
+            "SAFE", "PREMIUM", "PAID", "REPORT", "UPDATE", "NEWS", "VIEW", "ANALYSIS",
+            "INTRADAY", "SWING", "CALL", "PUTS", "OPTION", "OPTIONS", "INDEX", "INDICES"
+        }
+
         # 1. Category Classification
         category = CategoryEnum.OPTION
         if re.search(r"\b(BTST|STBT|BUY TODAY|SELL TOMORROW)\b", upper_text):
@@ -120,6 +136,8 @@ class SignalParser:
         elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE)\b", upper_text) and len(text) > 300:
             category = CategoryEnum.REPORT
         elif re.search(r"\b(CE|PE|CALL|PUT)\b", upper_text) or any(idx in upper_text for idx in INDEX_SYMBOLS):
+            category = CategoryEnum.OPTION
+        else:
             category = CategoryEnum.OPTION
 
         # 2. Action Detection
@@ -134,46 +152,68 @@ class SignalParser:
         elif re.search(r"\b(PE|PUT)\b", upper_text):
             option_type = OptionTypeEnum.PE
 
-        # 4. Symbol Detection
+        # 4. Symbol & Strike Detection
         symbol = "UNKNOWN"
-        # Check known index list first
+        strike_price = None
+
+        # Step 4a: Check index symbols first
         for idx in INDEX_SYMBOLS:
             if re.search(r"\b" + idx + r"\b", upper_text):
                 symbol = idx
                 break
 
+        # Step 4b: Match explicit option structure e.g. "BUY SBIN 800 CE" or "SBIN 800 CE" or "RELIANCE 3000 CALL"
+        op_match = re.search(r"(?:BUY|SELL)?\s*\b([A-Z0-9]{3,15})\s+(\d{2,6}(?:\.\d+)?)\s*(CE|PE|CALL|PUT)\b", upper_text)
+        if op_match:
+            cand_sym = op_match.group(1).strip()
+            if cand_sym not in ignored_words and cand_sym not in INDEX_SYMBOLS:
+                symbol = cand_sym
+                try:
+                    strike_price = float(op_match.group(2))
+                except ValueError:
+                    pass
+                if not option_type:
+                    option_type = OptionTypeEnum.CE if op_match.group(3) in ("CE", "CALL") else OptionTypeEnum.PE
+
+        # Step 4c: Match direct stock action e.g. "BUY TATAMOTORS", "SELL INFY CMP", "#SBIN"
         if symbol == "UNKNOWN":
-            # Search for stock symbols like "BUY TATASTEEL", "BTST BUY RELIANCE", "RELIANCE 3000 CE", "#INFY"
-            ignored_words = {
-                "BUY", "SELL", "BTST", "STBT", "CALL", "PUT", "STOP", "LOSS",
-                "TARGET", "ABOVE", "BELOW", "ENTRY", "RANGE", "TODAY", "TOMORROW",
-                "LONG", "SHORT", "TERM", "HOLD", "PICK", "STOCK", "NOW", "CMP",
-                "PRICE", "EXIT", "BOOK", "PROFIT", "SUPER", "POWER", "CALLS"
-            }
-            # Look for explicit stock ticker patterns or after action keywords
+            act_match = re.search(r"\b(?:BUY|SELL)\s+#?([A-Z0-9]{3,15})\b", upper_text)
+            if act_match:
+                cand_sym = act_match.group(1).strip()
+                if cand_sym not in ignored_words and cand_sym not in INDEX_SYMBOLS:
+                    symbol = cand_sym
+
+        # Step 4d: Match hashtags e.g. "#SBIN", "$RELIANCE"
+        if symbol == "UNKNOWN":
+            hash_match = re.search(r"[#\$]([A-Z0-9]{3,15})\b", text)
+            if hash_match:
+                cand_sym = hash_match.group(1).upper()
+                if cand_sym not in ignored_words and cand_sym not in INDEX_SYMBOLS:
+                    symbol = cand_sym
+
+        # Step 4e: Generic token search filtering out ignored words
+        if symbol == "UNKNOWN":
             tokens = re.findall(r"\b[A-Z]{3,15}\b", upper_text)
             for tok in tokens:
                 if tok not in ignored_words and tok not in INDEX_SYMBOLS and len(tok) >= 3:
                     symbol = tok
                     break
 
-
-        # 5. Strike Price
-        strike_price = None
-        strike_match = re.search(r"\b(\d{4,5})\s*(?:CE|PE|CALL|PUT)?\b", upper_text)
-        if strike_match and symbol in INDEX_SYMBOLS:
-            try:
-                strike_price = float(strike_match.group(1))
-            except ValueError:
-                pass
-        elif option_type:
-            # Look for strike near CE/PE
-            strike_match_generic = re.search(r"\b(\d{2,5}(?:\.\d+)?)\s*(?:CE|PE)\b", upper_text)
-            if strike_match_generic:
+        # 5. Strike Price fallback
+        if not strike_price:
+            strike_match = re.search(r"\b(\d{4,5})\s*(?:CE|PE|CALL|PUT)?\b", upper_text)
+            if strike_match and symbol in INDEX_SYMBOLS:
                 try:
-                    strike_price = float(strike_match_generic.group(1))
+                    strike_price = float(strike_match.group(1))
                 except ValueError:
                     pass
+            elif option_type:
+                strike_match_generic = re.search(r"\b(\d{2,5}(?:\.\d+)?)\s*(?:CE|PE)\b", upper_text)
+                if strike_match_generic:
+                    try:
+                        strike_price = float(strike_match_generic.group(1))
+                    except ValueError:
+                        pass
 
         # 6. Expiry
         expiry = None
