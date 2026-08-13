@@ -50,6 +50,15 @@ def _is_noise(schema_or_model) -> bool:
     if "[image attached]" in raw and "no text caption provided" in raw:
         return True
         
+    # Check for promotional / scam / spam messages
+    promo_keywords = [
+        "payment link", "join now paid", "monthly plan", "vip paidgroup", 
+        "wa.me/", "premium group", "discount", "offer", "subscription",
+        "paid group", "contact admin"
+    ]
+    if any(kw in raw for kw in promo_keywords):
+        return True
+        
     noise_keywords = [
         "target complete", "target hit", "target achieved", "target done",
         "jackpot", "today jackpot", "boom", "rocket", "full target"
