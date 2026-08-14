@@ -124,7 +124,8 @@ class SignalParser:
             "CHANNEL", "GROUP", "THIS", "THAT", "WITH", "FROM", "FOR", "AND", "THE", "YOU",
             "YOUR", "OUR", "WILL", "HIT", "DONE", "BEST", "SURE", "SURESHOT", "GAIN", "GAINS",
             "SAFE", "PREMIUM", "PAID", "REPORT", "UPDATE", "NEWS", "VIEW", "ANALYSIS",
-            "INTRADAY", "SWING", "CALL", "PUTS", "OPTION", "OPTIONS", "INDEX", "INDICES"
+            "INTRADAY", "SWING", "CALL", "PUTS", "OPTION", "OPTIONS", "INDEX", "INDICES",
+            "FILE", "DOWNLOAD", "IMAGES", "TRADER"
         }
 
         # 1. Category Classification
@@ -137,7 +138,7 @@ class SignalParser:
             category = CategoryEnum.BTST
         elif re.search(r"\b(INVESTMENT|LONG TERM|FUNDAMENTAL|MULTIPACKER|TARGET \d+ MONTHS|BUY AND HOLD)\b", upper_text):
             category = CategoryEnum.INVESTMENT
-        elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE)\b", upper_text):
+        elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE|GOOD MORNING|STOCK IN NEWS|FILE|DOWNLOAD|IMAGES|TRADER)\b", upper_text):
             category = CategoryEnum.REPORT
         elif re.search(r"\b(CE|PE|CALL|PUT)\b", upper_text) or any(idx in upper_text for idx in INDEX_SYMBOLS):
             category = CategoryEnum.OPTION

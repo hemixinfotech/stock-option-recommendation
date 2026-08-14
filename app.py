@@ -112,8 +112,11 @@ def api_parse_test():
     saved_record = save_recommendation(parsed)
     if saved_record:
         try:
-            from notifier import send_telegram_alert
-            send_telegram_alert(saved_record)
+            if saved_record.category != "REPORT":
+                from notifier import send_telegram_alert
+                send_telegram_alert(saved_record)
+            else:
+                logger.info("Skipping Telegram alert for REPORT category from API parse.")
         except Exception as notify_err:
             logger.error("Failed to send push alert from API parse: %s", notify_err)
 

@@ -146,8 +146,11 @@ class TelegramListenerService:
                     logger.info("Successfully ingested: %s | %s | %s", 
                                 saved_record.symbol, saved_record.category, saved_record.action)
                     try:
-                        from notifier import send_telegram_alert
-                        send_telegram_alert(saved_record)
+                        if saved_record.category != "REPORT":
+                            from notifier import send_telegram_alert
+                            send_telegram_alert(saved_record)
+                        else:
+                            logger.info("Skipping Telegram alert for REPORT category.")
                     except Exception as notify_err:
                         logger.error("Failed to send push alert: %s", notify_err)
 
