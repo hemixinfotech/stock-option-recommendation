@@ -137,6 +137,10 @@ class TelegramListenerService:
                     timestamp=msg_time
                 )
 
+                if recommendation.category == "IGNORE":
+                    logger.info("Message categorized as IGNORE. Skipping save.")
+                    return
+
                 # Persist to database with deduplication
                 saved_record = save_recommendation(
                     schema=recommendation,

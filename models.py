@@ -30,6 +30,7 @@ class CategoryEnum(str, Enum):
     BTST = "BTST"
     INVESTMENT = "INVESTMENT"
     REPORT = "REPORT"
+    IGNORE = "IGNORE"
 
 
 class ActionEnum(str, Enum):

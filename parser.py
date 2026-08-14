@@ -74,9 +74,12 @@ class SignalParser:
         # 2. Category is REPORT (often unstructured long text)
         # 3. Targets and Stop Loss are both missing for OPTION/BTST calls
         needs_fallback = (
-            regex_res["symbol"] == "UNKNOWN" or
-            regex_res["category"] == CategoryEnum.REPORT or
-            (regex_res["category"] in (CategoryEnum.OPTION, CategoryEnum.BTST) and not regex_res["targets"] and not regex_res["stop_loss"])
+            regex_res["category"] != CategoryEnum.IGNORE and
+            (
+                regex_res["symbol"] == "UNKNOWN" or
+                regex_res["category"] == CategoryEnum.REPORT or
+                (regex_res["category"] in (CategoryEnum.OPTION, CategoryEnum.BTST) and not regex_res["targets"] and not regex_res["stop_loss"])
+            )
         )
 
         if needs_fallback and self.gemini_client:
@@ -131,15 +134,16 @@ class SignalParser:
         # 1. Category Classification
         category = CategoryEnum.OPTION
         
-        # Any big paragraph (many lines or long text) should go to Reports & Research
-        if len(text) > 300 or text.count('\n') >= 5:
+        if re.search(r"\b(STOCK IN NEWS|STOCK REPORT|NET PROFIT|STOCK RESULT)\b", upper_text):
             category = CategoryEnum.REPORT
+        elif re.search(r"\b(GOOD MORNING|FILE|DOWNLOAD|IMAGES|TRADER|MORNING BRIEF|NIFTY VIEW|UPDATE|REPORT|MARKET UPDATE|RESEARCH|NEWS)\b", upper_text):
+            category = CategoryEnum.IGNORE
+        elif len(text) > 300 or text.count('\n') >= 5:
+            category = CategoryEnum.IGNORE
         elif re.search(r"\b(BTST|STBT|BUY TODAY|SELL TOMORROW)\b", upper_text):
             category = CategoryEnum.BTST
         elif re.search(r"\b(INVESTMENT|LONG TERM|FUNDAMENTAL|MULTIPACKER|TARGET \d+ MONTHS|BUY AND HOLD)\b", upper_text):
             category = CategoryEnum.INVESTMENT
-        elif re.search(r"\b(REPORT|MARKET UPDATE|RESEARCH|MORNING BRIEF|NIFTY VIEW|NEWS|UPDATE|GOOD MORNING|STOCK IN NEWS|FILE|DOWNLOAD|IMAGES|TRADER)\b", upper_text):
-            category = CategoryEnum.REPORT
         elif re.search(r"\b(CE|PE|CALL|PUT)\b", upper_text) or any(idx in upper_text for idx in INDEX_SYMBOLS):
             category = CategoryEnum.OPTION
         else:
@@ -293,7 +297,7 @@ Extract the structured fields from the raw Telegram text into a JSON object matc
 
 {{
   "symbol": "NSE Stock or Index Ticker e.g. TATASTEEL, NIFTY, BANKNIFTY",
-  "category": "OPTION" | "BTST" | "INVESTMENT" | "REPORT",
+  "category": "OPTION" | "BTST" | "INVESTMENT" | "REPORT" | "IGNORE",
   "action": "BUY" | "SELL",
   "option_type": "CE" | "PE" | null,
   "strike_price": 160.0 | null,
@@ -304,7 +308,7 @@ Extract the structured fields from the raw Telegram text into a JSON object matc
 }}
 
 Guidelines:
-- category must be OPTION (intraday/options calls), BTST (buy today sell tomorrow), INVESTMENT (multi-month picks), or REPORT (market analysis/pdf research).
+- category must be OPTION (intraday/options calls), BTST (buy today sell tomorrow), INVESTMENT (multi-month picks), REPORT (market analysis/pdf research), or IGNORE.
 - Output strictly valid JSON. Do not include markdown codeblock tags ```json or extra commentary.
 
 Raw Message:
@@ -333,7 +337,7 @@ Raw Message:
     def _build_fallback(self, text: str, source_channel: str, timestamp: Optional[str]) -> RecommendationSchema:
         return RecommendationSchema(
             symbol="UNKNOWN",
-            category=CategoryEnum.REPORT,
+            category=CategoryEnum.IGNORE,
             action=ActionEnum.BUY,
             raw_text=text,
             source_channel=source_channel,

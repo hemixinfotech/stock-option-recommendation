@@ -109,7 +109,9 @@ def api_parse_test():
 
     parsed = signal_parser.parse_message(text=text, source_channel=source_channel)
     # Persist parsed signal to database so it immediately appears in the UI
-    saved_record = save_recommendation(parsed)
+    saved_record = None
+    if parsed.category != "IGNORE":
+        saved_record = save_recommendation(parsed)
     if saved_record:
         try:
             if saved_record.category != "REPORT":
